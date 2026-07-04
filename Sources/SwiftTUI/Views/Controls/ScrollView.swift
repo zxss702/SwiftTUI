@@ -26,10 +26,19 @@ import Foundation
 
     private class ScrollControl: Control {
         var contentControl: Control!
-        var contentOffset: Extended = 0
+        var contentOffset: Extended = 0 {
+            didSet {
+                if let lazy = contentControl as? LazyControl {
+                    lazy.updateVisibleRegion(offset: contentOffset, height: layer.frame.size.height)
+                }
+            }
+        }
 
         override func layout(size: Size) {
             super.layout(size: size)
+            if let lazy = contentControl as? LazyControl {
+                lazy.updateVisibleRegion(offset: contentOffset, height: size.height)
+            }
             let contentSize = contentControl.size(proposedSize: .zero)
             contentControl.layout(size: contentSize)
             contentControl.layer.frame.position.line = -contentOffset
