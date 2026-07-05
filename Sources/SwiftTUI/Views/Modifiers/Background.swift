@@ -53,8 +53,13 @@ private struct Background<Content: View>: View, PrimitiveView, ModifierView {
             children[0].layout(size: size)
         }
 
-        override func cell(at position: Position) -> Cell? {
-            Cell(char: " ", backgroundColor: color)
+        override func draw(into buffer: inout ScreenBuffer) {
+            let cell = Cell(char: " ", backgroundColor: color)
+            for y in 0 ..< layer.frame.size.height.intValue {
+                for x in 0 ..< layer.frame.size.width.intValue {
+                    buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
+                }
+            }
         }
     }
 }

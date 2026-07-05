@@ -144,30 +144,35 @@ private struct Border<Content: View>: View, PrimitiveView, ModifierView {
             self.layer.frame.size = size
         }
         
-        override func cell(at position: Position) -> Cell? {
-            var char: Character?
-            if position.line == 0 {
-                if position.column == 0 {
-                    char = style.topLeft
-                } else if position.column == layer.frame.size.width - 1 {
-                    char = style.topRight
-                } else {
-                    char = style.top
+        override func draw(into buffer: inout ScreenBuffer) {
+            let width = layer.frame.size.width.intValue
+            let height = layer.frame.size.height.intValue
+            guard width > 0, height > 0 else { return }
+            
+            for x in 1 ..< width - 1 {
+                buffer.setCell(Cell(char: style.top, foregroundColor: color), at: Position(column: Extended(x), line: 0))
+                if height > 1 {
+                    buffer.setCell(Cell(char: style.bottom, foregroundColor: color), at: Position(column: Extended(x), line: Extended(height - 1)))
                 }
-            } else if position.line == layer.frame.size.height - 1 {
-                if position.column == 0 {
-                    char = style.bottomLeft
-                } else if position.column == layer.frame.size.width - 1 {
-                    char = style.bottomRight
-                } else {
-                    char = style.bottom
-                }
-            } else if position.column == 0 {
-                char = style.left
-            } else if position.column == layer.frame.size.width - 1 {
-                char = style.right
             }
-            return char.map { Cell(char: $0, foregroundColor: color) }
+            
+            for y in 1 ..< height - 1 {
+                buffer.setCell(Cell(char: style.left, foregroundColor: color), at: Position(column: 0, line: Extended(y)))
+                if width > 1 {
+                    buffer.setCell(Cell(char: style.right, foregroundColor: color), at: Position(column: Extended(width - 1), line: Extended(y)))
+                }
+            }
+            
+            buffer.setCell(Cell(char: style.topLeft, foregroundColor: color), at: Position(column: 0, line: 0))
+            if width > 1 {
+                buffer.setCell(Cell(char: style.topRight, foregroundColor: color), at: Position(column: Extended(width - 1), line: 0))
+            }
+            if height > 1 {
+                buffer.setCell(Cell(char: style.bottomLeft, foregroundColor: color), at: Position(column: 0, line: Extended(height - 1)))
+            }
+            if width > 1 && height > 1 {
+                buffer.setCell(Cell(char: style.bottomRight, foregroundColor: color), at: Position(column: Extended(width - 1), line: Extended(height - 1)))
+            }
         }
     }
 }
