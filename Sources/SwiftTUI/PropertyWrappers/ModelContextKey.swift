@@ -1,5 +1,5 @@
 import Foundation
-import JsonDataCore
+@_exported import JsonData
 
 public struct ModelContextKey: EnvironmentKey {
     public static var defaultValue: ModelContext? = nil
