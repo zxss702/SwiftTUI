@@ -7,7 +7,7 @@ import JsonData
 #endif
 
 @Model
-final class TaskItem: @unchecked Sendable {
+final class TaskItem {
     @Attribute(.unique)
     var id: UUID
     var title: String

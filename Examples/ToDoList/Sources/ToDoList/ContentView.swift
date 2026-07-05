@@ -5,6 +5,6 @@ struct ContentView: View {
         ToDoList()
             .padding()
             .border()
-            .background(.brightWhite)
+            .background(.green)
     }
 }

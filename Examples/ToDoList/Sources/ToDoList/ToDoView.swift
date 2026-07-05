@@ -22,8 +22,8 @@ struct ToDoView: View {
 
     private func delete() {
         deleting = true
-        Task {
-            try await Task.sleep(for: .milliseconds(500))
+        _ = Task {
+            try? await Task.sleep(for: .milliseconds(500))
             onDelete()
         }
     }

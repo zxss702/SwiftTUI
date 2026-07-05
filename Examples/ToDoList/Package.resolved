@@ -1,5 +1,5 @@
 {
-  "originHash" : "85d276e0dd9abe46016f66e4eafbb6042773dfaeb8a9ca279f86f31fd8cbe5d3",
+  "originHash" : "12ad31b116fc73a6f5a6a3ca403a8d1c6ea04158b00d4d31367f774a0f46a69e",
   "pins" : [
     {
       "identity" : "grdb.swift",
@@ -8,6 +8,15 @@
       "state" : {
         "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
         "version" : "7.11.1"
+      }
+    },
+    {
+      "identity" : "jsondata",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zxss702/JsonData.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "2d00d5096644abd366f8c1b270d8f93522bded12"
       }
     },
     {
