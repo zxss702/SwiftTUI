@@ -1,7 +1,4 @@
-import Foundation
-#if os(macOS)
-import Combine
-#endif
+import Observation
 
 /// The node of a view graph.
 ///
@@ -20,9 +17,6 @@ final class Node {
 
     var state: [String: Any] = [:]
     var environment: ((inout EnvironmentValues) -> Void)?
-    #if os(macOS)
-    var subscriptions: [String: AnyCancellable] = [:]
-    #endif
 
     var control: Control?
     weak var application: Application?
@@ -43,7 +37,15 @@ final class Node {
 
     func update(using view: GenericView) {
         build()
-        view.updateNode(self)
+        withObservationTracking {
+            view.updateNode(self)
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                if let self = self {
+                    self.root.application?.invalidateNode(self)
+                }
+            }
+        }
     }
 
     var root: Node { parent?.root ?? self }
@@ -67,7 +69,15 @@ final class Node {
 
     func build() {
         if !built {
-            self.view.buildNode(self)
+            withObservationTracking {
+                self.view.buildNode(self)
+            } onChange: { [weak self] in
+                Task { @MainActor in
+                    if let self = self {
+                        self.root.application?.invalidateNode(self)
+                    }
+                }
+            }
             built = true
             if !(view is OptionalView), let container = view as? LayoutRootView {
                 container.loadData(node: self)

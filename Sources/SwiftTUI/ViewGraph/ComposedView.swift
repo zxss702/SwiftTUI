@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 /// This wraps a composed (user-defined) view, so that it can be used in a view graph node.
 @MainActor struct ComposedView<I: View>: GenericView {
@@ -7,9 +8,6 @@ import Foundation
     func buildNode(_ node: Node) {
         view.setupStateProperties(node: node)
         view.setupEnvironmentProperties(node: node)
-        #if os(macOS)
-        view.setupObservedObjectProperties(node: node)
-        #endif
         node.addNode(at: 0, Node(view: view.body.view))
     }
 

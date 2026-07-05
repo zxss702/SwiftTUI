@@ -100,7 +100,6 @@ swift run
 
 - ``State``
 - ``Binding``
-- ``ObservedObject``
 - ``Environment``
 - ``View/environment(_:_:)``
 - ``EnvironmentKey``
