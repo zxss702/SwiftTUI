@@ -1,0 +1,33 @@
+{
+  "originHash" : "466b7ef238da5637b452f857e99224bc41581585fad0a05c7ece328fc9f05132",
+  "pins" : [
+    {
+      "identity" : "grdb.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/groue/GRDB.swift.git",
+      "state" : {
+        "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
+        "version" : "7.11.1"
+      }
+    },
+    {
+      "identity" : "jsondata",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zxss702/JsonData.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "2d00d5096644abd366f8c1b270d8f93522bded12"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
+      }
+    }
+  ],
+  "version" : 3
+}
