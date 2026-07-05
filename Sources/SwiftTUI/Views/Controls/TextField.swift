@@ -66,34 +66,33 @@ import Foundation
             return Position(column: Extended(text.width), line: 0)
         }
 
-        override func cell(at position: Position) -> Cell? {
-            guard position.line == 0 else { return nil }
-            let col = position.column.intValue
+        override func draw(into buffer: inout ScreenBuffer) {
+            var currentWidth = 0
             
             if text.isEmpty {
-                var currentWidth = 0
                 for i in placeholder.indices {
                     let charWidth = placeholder[i].width
-                    if col >= currentWidth && col < currentWidth + charWidth {
-                        return Cell(
-                            char: col > currentWidth ? "\u{0000}" : placeholder[i],
-                            foregroundColor: placeholderColor
-                        )
+                    buffer.setCell(Cell(char: placeholder[i], foregroundColor: placeholderColor), at: Position(column: Extended(currentWidth), line: 0))
+                    for w in 1 ..< charWidth {
+                        buffer.setCell(Cell(char: "\u{0000}", foregroundColor: placeholderColor), at: Position(column: Extended(currentWidth + w), line: 0))
                     }
                     currentWidth += charWidth
                 }
-                return .init(char: " ")
+            } else {
+                for i in text.indices {
+                    let charWidth = text[i].width
+                    buffer.setCell(Cell(char: text[i]), at: Position(column: Extended(currentWidth), line: 0))
+                    for w in 1 ..< charWidth {
+                        buffer.setCell(Cell(char: "\u{0000}"), at: Position(column: Extended(currentWidth + w), line: 0))
+                    }
+                    currentWidth += charWidth
+                }
             }
             
-            var currentWidth = 0
-            for i in text.indices {
-                let charWidth = text[i].width
-                if col >= currentWidth && col < currentWidth + charWidth {
-                    return Cell(char: col > currentWidth ? "\u{0000}" : text[i])
-                }
-                currentWidth += charWidth
+            let maxWidth = layer.frame.size.width.intValue
+            for w in currentWidth ..< maxWidth {
+                buffer.setCell(Cell(char: " "), at: Position(column: Extended(w), line: 0))
             }
-            return .init(char: " ")
         }
 
         override var selectable: Bool { true }
