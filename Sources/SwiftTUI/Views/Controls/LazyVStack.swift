@@ -54,11 +54,15 @@ import Foundation
 
         var lastOffset: Extended = 0
         var lastHeight: Extended = 100 // fallback initial
+        private var lastStartIndex: Int?
+        private var lastEndIndex: Int?
 
         private var loadedControls: [Int: Control] = [:]
 
         func clearCache() {
             loadedControls.removeAll()
+            lastStartIndex = nil
+            lastEndIndex = nil
         }
 
         init(alignment: HorizontalAlignment, spacing: Extended) {
@@ -66,7 +70,7 @@ import Foundation
             self.spacing = spacing
         }
 
-        func updateVisibleRegion(offset: Extended, height: Extended) {
+        override func updateVisibleRegion(offset: Extended, height: Extended) {
             lastOffset = offset
             lastHeight = height
             
@@ -83,6 +87,9 @@ import Foundation
             let endIndex = min(totalChildrenSize - 1, endOffsetInt + buffer)
             
             if startIndex > endIndex { return }
+            if startIndex == lastStartIndex && endIndex == lastEndIndex { return }
+            lastStartIndex = startIndex
+            lastEndIndex = endIndex
             
             // Rebuild children
             for i in (0 ..< children.count).reversed() {

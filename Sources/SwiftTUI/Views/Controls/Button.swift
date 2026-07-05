@@ -82,12 +82,19 @@ import Foundation
     private class ButtonLayer: Layer {
         var highlighted = false
 
-        override func cell(at position: Position) -> Cell? {
-            var cell = super.cell(at: position)
+        override func draw(into buffer: inout ScreenBuffer) {
+            super.draw(into: &buffer)
             if highlighted {
-                cell?.attributes.inverted.toggle()
+                for y in 0 ..< frame.size.height.intValue {
+                    for x in 0 ..< frame.size.width.intValue {
+                        let pos = Position(column: Extended(x), line: Extended(y))
+                        if var cell = buffer.cell(at: pos) {
+                            cell.attributes.inverted.toggle()
+                            buffer.setCell(cell, at: pos)
+                        }
+                    }
+                }
             }
-            return cell
         }
     }
 }

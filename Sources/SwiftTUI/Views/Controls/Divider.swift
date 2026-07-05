@@ -137,19 +137,18 @@ extension EnvironmentValues {
             }
         }
         
-        override func cell(at position: Position) -> Cell? {
+        override func draw(into buffer: inout ScreenBuffer) {
+            let cell: Cell
             switch orientation {
             case .horizontal:
-                Cell(
-                    char: style.vertical,
-                    foregroundColor: color
-                )
-
+                cell = Cell(char: style.vertical, foregroundColor: color)
             case .vertical:
-                Cell(
-                    char: style.horizontal,
-                    foregroundColor: color
-                )
+                cell = Cell(char: style.horizontal, foregroundColor: color)
+            }
+            for y in 0 ..< layer.frame.size.height.intValue {
+                for x in 0 ..< layer.frame.size.width.intValue {
+                    buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
+                }
             }
         }
     }

@@ -28,17 +28,13 @@ import Foundation
         var contentControl: Control!
         var contentOffset: Extended = 0 {
             didSet {
-                if let lazy = contentControl as? LazyControl {
-                    lazy.updateVisibleRegion(offset: contentOffset, height: layer.frame.size.height)
-                }
+                contentControl.updateVisibleRegion(offset: contentOffset, height: layer.frame.size.height)
             }
         }
 
         override func layout(size: Size) {
             super.layout(size: size)
-            if let lazy = contentControl as? LazyControl {
-                lazy.updateVisibleRegion(offset: contentOffset, height: size.height)
-            }
+            contentControl.updateVisibleRegion(offset: contentOffset, height: size.height)
             let contentSize = contentControl.size(proposedSize: Size(width: size.width, height: .infinity))
             contentControl.layout(size: contentSize)
             contentControl.layer.frame.position.line = -contentOffset
@@ -57,10 +53,20 @@ import Foundation
         override func handleMouseEvent(_ event: MouseEvent) {
             if case .scroll(_, let deltaY) = event.type {
                 contentOffset += Extended(deltaY)
-                let contentHeight = contentControl.size(proposedSize: Size(width: layer.frame.size.width, height: .infinity)).height
-                let maxOffset = max(Extended(0), contentHeight - layer.frame.size.height)
+                let contentSize = contentControl.size(proposedSize: Size(width: layer.frame.size.width, height: .infinity))
+                let maxOffset = max(Extended(0), contentSize.height - layer.frame.size.height)
                 contentOffset = min(max(Extended(0), contentOffset), maxOffset)
                 
+                let msg = "  ScrollControl: offset=\(contentOffset) maxOff=\(maxOffset) frameH=\(layer.frame.size.height) contentH=\(contentSize.height)\n"
+                if let fh = FileHandle(forWritingAtPath: "/tmp/stui.log") {
+                    fh.seekToEndOfFile()
+                    fh.write(msg.data(using: .utf8)!)
+                    fh.closeFile()
+                }
+                
+                // Tell lazy children the new visible region BEFORE layout
+                contentControl.updateVisibleRegion(offset: contentOffset, height: layer.frame.size.height)
+                contentControl.layout(size: contentSize)
                 contentControl.layer.frame.position.line = -contentOffset
                 layer.invalidate()
             } else {

@@ -88,58 +88,77 @@ import Foundation
             return Size(width: Extended(visualWidth), height: 1)
         }
         
-        override func cell(at position: Position) -> Cell? {
-            guard position.line == 0 else { return nil }
-            guard position.column < Extended(visualWidth) else { return .init(char: " ") }
-            
-            let col = position.column.intValue
+        override func draw(into buffer: inout ScreenBuffer) {
+            var currentWidth = 0
             
             if #available(macOS 12, *), let attributedText {
                 let characters = attributedText.characters
-                var currentWidth = 0
                 for i in characters.indices {
                     let charWidth = characters[i].width
-                    if col >= currentWidth && col < currentWidth + charWidth {
-                        let isPadding = col > currentWidth
-                        let char = attributedText[i ..< characters.index(after: i)]
-                        let cellAttributes = CellAttributes(
-                            bold: char.bold ?? bold,
-                            italic: char.italic ?? italic,
-                            underline: char.underline ?? underline,
-                            strikethrough: char.strikethrough ?? strikethrough,
-                            inverted: char.inverted ?? false
-                        )
-                        return Cell(
-                            char: isPadding ? "\u{0000}" : char.characters[char.startIndex],
+                    let char = attributedText[i ..< characters.index(after: i)]
+                    let cellAttributes = CellAttributes(
+                        bold: char.bold ?? bold,
+                        italic: char.italic ?? italic,
+                        underline: char.underline ?? underline,
+                        strikethrough: char.strikethrough ?? strikethrough,
+                        inverted: char.inverted ?? false
+                    )
+                    
+                    let cell = Cell(
+                        char: char.characters[char.startIndex],
+                        foregroundColor: char.foregroundColor ?? foregroundColor,
+                        backgroundColor: char.backgroundColor,
+                        attributes: cellAttributes
+                    )
+                    
+                    buffer.setCell(cell, at: Position(column: Extended(currentWidth), line: 0))
+                    
+                    for w in 1 ..< charWidth {
+                        let paddingCell = Cell(
+                            char: "\u{0000}",
                             foregroundColor: char.foregroundColor ?? foregroundColor,
                             backgroundColor: char.backgroundColor,
                             attributes: cellAttributes
                         )
+                        buffer.setCell(paddingCell, at: Position(column: Extended(currentWidth + w), line: 0))
                     }
+                    
                     currentWidth += charWidth
                 }
             } else if let text {
-                var currentWidth = 0
                 for i in text.indices {
                     let charWidth = text[i].width
-                    if col >= currentWidth && col < currentWidth + charWidth {
-                        let isPadding = col > currentWidth
-                        let cellAttributes = CellAttributes(
-                            bold: bold,
-                            italic: italic,
-                            underline: underline,
-                            strikethrough: strikethrough
-                        )
-                        return Cell(
-                            char: isPadding ? "\u{0000}" : text[i],
+                    let cellAttributes = CellAttributes(
+                        bold: bold,
+                        italic: italic,
+                        underline: underline,
+                        strikethrough: strikethrough
+                    )
+                    let cell = Cell(
+                        char: text[i],
+                        foregroundColor: foregroundColor,
+                        attributes: cellAttributes
+                    )
+                    
+                    buffer.setCell(cell, at: Position(column: Extended(currentWidth), line: 0))
+                    
+                    for w in 1 ..< charWidth {
+                        let paddingCell = Cell(
+                            char: "\u{0000}",
                             foregroundColor: foregroundColor,
                             attributes: cellAttributes
                         )
+                        buffer.setCell(paddingCell, at: Position(column: Extended(currentWidth + w), line: 0))
                     }
+                    
                     currentWidth += charWidth
                 }
             }
-            return nil
+            
+            let maxWidth = layer.frame.size.width.intValue
+            for w in currentWidth ..< maxWidth {
+                buffer.setCell(Cell(char: " "), at: Position(column: Extended(w), line: 0))
+            }
         }
         
         private var visualWidth: Int {
