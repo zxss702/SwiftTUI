@@ -52,35 +52,20 @@ import Foundation
         self.invalidated = rect.union(invalidated)
     }
 
-    func cell(at position: Position) -> Cell? {
-        var char: Cell? = nil
-
-        // Draw children
-        for child in children.reversed() {
-            guard child.frame.contains(position) else { continue }
-            let position = position - child.frame.position
-            if let cell = child.cell(at: position) {
-                if char == nil {
-                    char = cell
-                }
-                if let color = cell.backgroundColor {
-                    char?.backgroundColor = color
-                    break
-                }
-            }
-        }
-
+    func draw(into buffer: inout ScreenBuffer) {
+        buffer.saveState()
+        buffer.translate(by: frame.position)
+        buffer.clip(to: Rect(position: .zero, size: frame.size))
+        
         // Draw layer content as background
-        if let cell = content?.cell(at: position) {
-            if char == nil {
-                char = cell
-            }
-            if char?.backgroundColor == nil, let backgroundColor = cell.backgroundColor {
-                char?.backgroundColor = backgroundColor
-            }
+        content?.draw(into: &buffer)
+        
+        // Draw children back-to-front
+        for child in children {
+            child.draw(into: &buffer)
         }
-
-        return char
+        
+        buffer.restoreState()
     }
 
 }

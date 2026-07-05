@@ -27,10 +27,13 @@ import Foundation
         // ensuring DeltaCompression accurately redraws externally corrupted areas (like IME input)
         vtRenderer?.invalidate(rect: rect)
         
+        var buffer = ScreenBuffer(rect: rect)
+        layer.draw(into: &buffer)
+        
         for line in rect.minLine.intValue ... rect.maxLine.intValue {
             for column in rect.minColumn.intValue ... rect.maxColumn.intValue {
                 let position = Position(column: Extended(column), line: Extended(line))
-                if let cell = layer.cell(at: position) {
+                if let cell = buffer.cell(at: position) {
                     drawPixel(cell, at: position)
                 } else {
                     let vtPos = VTPosition(row: Int(line) + 1, column: Int(column) + 1)

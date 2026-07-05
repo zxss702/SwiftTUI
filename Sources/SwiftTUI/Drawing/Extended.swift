@@ -2,10 +2,10 @@ import Foundation
 
 /// `Int` extended with infinity values, used by certain modifiers such as `.frame(maxWidth:)` to
 /// allow views taking up all necessary space.
-public struct Extended: Equatable, Sendable {
+public struct Extended: Equatable, Hashable, Sendable {
     fileprivate let data: Data
 
-    fileprivate enum Data {
+    fileprivate enum Data: Hashable, Sendable {
         case number(Int)
         case positiveInfinity
         case negativeInfinity
