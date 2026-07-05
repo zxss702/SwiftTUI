@@ -11,7 +11,7 @@
 - `Sources/SwiftTUI/Views/` — SwiftUI 风格声明式视图（Button、Text、TextField、ScrollView、Stacks 等）
 - `Sources/SwiftTUI/Controls/` — Control 基类和 Window
 - `Sources/SwiftTUI/RunLoop/` — Application 主循环
-- `Sources/SwiftTUI/PropertyWrappers/` — @State、@Binding、@Environment、@ObservedObject
+- `Sources/SwiftTUI/PropertyWrappers/` — @State、@Binding、@Environment、@Query
 - `Sources/SwiftTUI/Drawing/` — Layer 渲染
 - `Examples/` — Numbers、ToDoList、Flags、Colors
 
