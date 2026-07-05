@@ -34,6 +34,7 @@ import Foundation
         control.alignment = alignment
         control.spacing = spacing ?? 0
         control.totalChildrenSize = node.children[0].size
+        control.clearCache() // Clear cache so views are recreated correctly on update
         control.updateVisibleRegion(offset: control.lastOffset, height: control.lastHeight)
     }
 
@@ -56,6 +57,10 @@ import Foundation
 
         private var loadedControls: [Int: Control] = [:]
 
+        func clearCache() {
+            loadedControls.removeAll()
+        }
+
         init(alignment: HorizontalAlignment, spacing: Extended) {
             self.alignment = alignment
             self.spacing = spacing
@@ -71,8 +76,8 @@ import Foundation
             let buffer: Int = 5 // Load a few items before and after
 
             let safeHeight = height == .infinity ? 100 : height
-            let offsetInt = Int(offset / estimatedRowHeight)
-            let endOffsetInt = Int((offset + safeHeight) / estimatedRowHeight)
+            let offsetInt = (offset / estimatedRowHeight).intValue
+            let endOffsetInt = ((offset + safeHeight) / estimatedRowHeight).intValue
             
             let startIndex = max(0, offsetInt - buffer)
             let endIndex = min(totalChildrenSize - 1, endOffsetInt + buffer)
@@ -138,64 +143,4 @@ import Foundation
             }
         }
     }
-
-        func updateVisibleRegion(offset: Extended, height: Extended) {
-            lastOffset = offset
-            lastHeight = height
-            
-            guard let contentNode = contentNode, totalChildrenSize > 0 else { return }
-
-            let estimatedRowHeight: Extended = 1 + spacing
-            let buffer: Int = 5 // Load a few items before and after
-
-            let startIndex = max(0, Int(offset / estimatedRowHeight) - buffer)
-            let endIndex = min(totalChildrenSize - 1, Int((offset + height) / estimatedRowHeight) + buffer)
-            
-            var newLoaded: [Int: Control] = [:]
-            
-            for i in startIndex...endIndex {
-                if let existing = loadedControls[i] {
-                    newLoaded[i] = existing
-                } else {
-                    let control = contentNode.control(at: i)
-                    newLoaded[i] = control
-                    addSubview(control)
-                }
-            }
-            
-            // Remove views that are no longer in range
-            for (i, control) in loadedControls {
-                if newLoaded[i] == nil {
-                    control.removeFromSuperview()
-                }
-            }
-            
-            loadedControls = newLoaded
-            layer.invalidate()
-        }
-
-        override func size(proposedSize: Size) -> Size {
-            let estimatedRowHeight: Extended = 1
-            let totalHeight = Extended(totalChildrenSize) * estimatedRowHeight + Extended(max(0, totalChildrenSize - 1)) * spacing
-            return Size(width: proposedSize.width, height: totalHeight)
-        }
-
-        override func layout(size: Size) {
-            super.layout(size: size)
-            
-            let estimatedRowHeight: Extended = 1 + spacing
-            
-            for (i, control) in loadedControls {
-                let childSize = control.size(proposedSize: Size(width: size.width, height: .infinity))
-                control.layout(size: childSize)
-                
-                control.layer.frame.position.line = Extended(i) * estimatedRowHeight
-                
-                switch alignment {
-                case .leading: control.layer.frame.position.column = 0
-                case .center: control.layer.frame.position.column = (size.width - control.layer.frame.size.width) / 2
-                case .trailing: control.layer.frame.position.column = size.width - control.layer.frame.size.width
-                }
-            }
-        }
-    }
+}

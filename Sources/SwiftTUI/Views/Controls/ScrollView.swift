@@ -39,7 +39,7 @@ import Foundation
             if let lazy = contentControl as? LazyControl {
                 lazy.updateVisibleRegion(offset: contentOffset, height: size.height)
             }
-            let contentSize = contentControl.size(proposedSize: .zero)
+            let contentSize = contentControl.size(proposedSize: Size(width: size.width, height: .infinity))
             contentControl.layout(size: contentSize)
             contentControl.layer.frame.position.line = -contentOffset
         }
@@ -57,7 +57,7 @@ import Foundation
         override func handleMouseEvent(_ event: MouseEvent) {
             if case .scroll(_, let deltaY) = event.type {
                 contentOffset += Extended(deltaY)
-                let contentHeight = contentControl.size(proposedSize: .zero).height
+                let contentHeight = contentControl.size(proposedSize: Size(width: layer.frame.size.width, height: .infinity)).height
                 let maxOffset = max(Extended(0), contentHeight - layer.frame.size.height)
                 contentOffset = min(max(Extended(0), contentOffset), maxOffset)
                 
