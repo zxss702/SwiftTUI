@@ -63,11 +63,55 @@ public class Application {
                 handleMouseInput(mouseEvent)
             }
             if !isRunning { break }
+            
+            // Fix Linux Task starvation: Yield the MainActor so any pending `invalidateNode` tasks 
+            // queued by Observation/GRDB can run before we check `updateScheduled`.
+            await Task.yield()
+            if updateScheduled {
+                try await update()
+            }
+
+            #if canImport(SwiftData)
+            // macOS SwiftData relies on CFRunLoop to autosave and post notifications.
+            // Since we use an AsyncStream event loop, we manually check and save changes here.
+            flushSwiftDataIfNeeded()
+            #endif
         }
-        
-        
+        // Reset terminal on exit
         self.vtRenderer = nil
         self.renderer.vtRenderer = nil
+    }
+    var swiftDataContext: ModelContext?
+    #if canImport(SwiftData)
+    var swiftDataObservers: [() -> Void] = []
+    #endif
+
+    @MainActor
+    private func flushSwiftDataIfNeeded() {
+        if let context = swiftDataContext {
+            if context.hasChanges {
+                try? context.save()
+                #if canImport(SwiftData)
+                for observer in swiftDataObservers {
+                    observer()
+                }
+                #endif
+            }
+        }
+    }
+
+    @MainActor
+    public func modelContainer(_ container: ModelContainer) -> Self {
+        let context = ModelContext(container)
+        self.swiftDataContext = context
+        
+        let oldEnv = self.node.environment
+        self.node.environment = { env in
+            oldEnv?(&env)
+            env.modelContext = context
+        }
+        self.invalidateNode(self.node)
+        return self
     }
 
     func handleKeyInput(_ event: KeyEvent) {
@@ -102,8 +146,10 @@ public class Application {
     }
 
     func invalidateNode(_ node: Node) {
-        invalidatedNodes.append(node)
-        scheduleUpdate()
+        if !invalidatedNodes.contains(where: { $0 === node }) {
+            invalidatedNodes.append(node)
+            scheduleUpdate()
+        }
     }
 
     func scheduleUpdate() {
