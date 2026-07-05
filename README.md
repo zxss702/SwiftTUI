@@ -1,33 +1,28 @@
 # SwiftTUI
 
-![swift 6.0](https://img.shields.io/badge/swift-6.0-orange.svg)
-![platform macOS](https://img.shields.io/badge/platform-macOS%2015+-lightgrey.svg)
-![platform Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)
-![platform Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
-
-把 GUI 的交互直觉带进终端。
+把 SwiftUI 带进终端。支持 macOS、Linux、Win。使用 VT 高性能渲染。
 
 SwiftTUI 将 SwiftUI 的声明式 API 引入终端应用开发。你只需像写 SwiftUI 一样描述界面，就能得到一个以鼠标驱动为主的 TUI 程序——点击按钮、悬停高亮、滚轮翻页。
 
-### 核心特性
+## 核心特性
 
-**以鼠标驱动为核心交互：** 鼠标悬浮、点击、滚轮滚动。按钮在鼠标划过时自动高亮，点击触发——键盘输入仍有保留支持，但鼠标已成为主力交互方式。
+- 鼠标驱动：绝大部分主要组件均支持鼠标点击、悬浮、滚动等。
+- SwiftUI-DSL Like：不过多赘述了，基本上和 SwiftUI 差不多。
+- JsonData 兼容：支持类似 SwiftUI 中 `@Query` 等用法。（JsonData 是 SwiftData 的 public api 基本等效物。详情请参阅 https://github.com/zxss702/JsonData，采用 MPL 2 协议开源。）
+- 高性能渲染：底层采用 VirtualTerminal 子系统。采用 Push 模式。
 
-**SwiftUI 声明式写法：** 用 `@State`、`@Binding`、`@Environment`、`@ObservedObject` 管理状态，用 `VStack` / `HStack` / `ZStack` 布局，用 `@ViewBuilder` 和 `ForEach` 组合视图。
+## 目前支持的 SwiftUI 能力：
 
-**高性能差分渲染：** 底层 VirtualTerminal 子系统直接将变更写入终端缓冲区，配合 SGR 优化、光标运动压缩和增量差分，只刷新真正变化的区域。
+✓ `Button`（点击/悬浮）、`Text`、`TextField`、`TextEdit`
+✓ `ScrollView`、`GeometryReader`、`Spacer`、`Divider`
+✓ `VStack`、`HStack`、`ZStack`、`LazyVStack`、`LazyVGrid`
+✓ `Color` 支持 ANSI / xterm / TrueColor
+✓ `.frame()`、`.padding()`、`.border()`、`.foregroundColor()`、`.background()`
+✓ `.bold()`、`.italic()`、`.underline()`、`.strikethrough()`、`.onAppear()`、`.onHover()`、`.environment(_:_:)`
+✓ `@State`、`@Binding`、`@Environment`、`@Query`
+✓ `ForEach`、`Group`、`@ViewBuilder`
 
-目前支持的 SwiftUI 能力：
-
-✓ `Button`（支持点击与悬浮）、`TextField`、`Text`（粗体/斜体/下划线/删除线）  
-✓ `ScrollView`、`GeometryReader`、`Spacer`、`Divider`  
-✓ `.frame()`、`.padding()`、`.border()`、`.foregroundColor()`、`.backgroundColor`  
-✓ `.onAppear()`、`.onHover()`  
-✓ `Color` 支持 ANSI / xterm / TrueColor  
-✓ `@State`、`@Binding`、`@Environment`、`@ObservedObject`  
-✓ `ForEach`、`Group`、`@ViewBuilder`、结构标识
-
-### 快速开始
+## 快速开始
 
 添加 SwiftTUI 依赖，然后像写 SwiftUI 一样写视图。启动时用 `Application` 并传入根视图：
 
@@ -45,33 +40,35 @@ struct MyTerminalView: View {
 try await Application(rootView: MyTerminalView()).start()
 ```
 
+与 JsonData（SwiftData）配合
+
+```swift
+import SwiftTUI
+import JsonData
+
+struct MyTerminalView: View { ... } // 与在 SwiftUI 中使用 SwiftData 基本一致。
+
+let schema = Schema([TaskItem.self])
+let modelConfiguration = ModelConfiguration(schema: schema, url: URL(fileURLWithPath: "todo.db"))
+
+let modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
+
+try await Application(rootView: MyTerminalView())
+    .modelContainer(modelContainer) // 通过此注入环境以解决刷新问题。当前只支持一个窗口使用一个 data 容器。
+    .start()
+```
+
 在终端中切换到你的包目录后运行：
 
 ```
 swift run
 ```
 
-### 示例
+## 示例
 
-仓库内提供了四个示例项目：
+仓库内提供了几个简单示例，可供参考。
 
-#### Numbers（[Examples/Numbers](Examples/Numbers)）
-
-最简单的交互示例——点击按钮增减列表条目数量，支持滚轮翻阅。展示 Button、ForEach 和 ScrollView 的基本用法。
-
-#### ToDoList（[Examples/ToDoList](Examples/ToDoList)）
-
-经典的待办事项应用。鼠标点击某个条目前面的复选框即可标记完成，已完成的条目会在半秒后自动消失。底部文本框可直接输入新事项并回车添加。
-
-#### Flags（[Examples/Flags](Examples/Flags)）
-
-国旗编辑器。点击旗帜上的颜色条即可切换颜色，右侧面板可调整颜色数量和排列方向（横向/纵向）。
-
-#### Colors（[Examples/Colors](Examples/Colors)）
-
-颜色浏览器。展示 SwiftTUI 对 ANSI 256 色和 TrueColor 的完整支持。
-
-### 架构
+## 架构
 
 SwiftTUI 采用分层架构，核心位于 `Sources/SwiftTUI/VirtualTerminal/`：
 
@@ -90,6 +87,22 @@ VirtualTerminal 子系统
    stdout（直接写入终端）
 ```
 
-### 参与贡献
+## 参与贡献
+我们非常欢迎你为 SwiftTUI 提交代码或提出宝贵建议！在提交代码前，请务必阅读我们的 [贡献指南 (CONTRIBUTING.md)](CONTRIBUTING.md)。
 
-这是一个开源项目，欢迎贡献！SwiftTUI 的核心理念是：在 API 设计和内部机制上尽可能贴近 SwiftUI，除非某些设计对终端应用没有意义。对于 SwiftUI 不具备但对终端应用有用的特性，建议放在独立项目中迭代。
+## 开源协议
+本项目采用 **MPL-2.0 (Mozilla Public License 2.0)** 协议开源。
+
+这意味着：
+- **您可以自由地**将本框架用于您的商业闭源项目中（无需将您的 App 开源）。
+- **但如果您直接修改了本框架的源码**，您必须将这些针对本框架的修改以 MPL-2.0 协议开源回馈给社区。我们鼓励大家共同将 SwiftTUI 维护得更好！
+
+## 获赞历史
+
+<a href="https://star-history.com/#zxss702/SwiftTUI">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=zxss702/SwiftTUI&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=zxss702/SwiftTUI&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=zxss702/SwiftTUI&type=Date" />
+  </picture>
+</a>
