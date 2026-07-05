@@ -1,6 +1,10 @@
 import SwiftTUI
 import Foundation
-import JsonDataCore
+#if canImport(SwiftData)
+import SwiftData
+#else
+import JsonData
+#endif
 
 @Model
 final class TaskItem: @unchecked Sendable {
@@ -57,16 +61,11 @@ struct ContentView: View {
     }
 }
 
-// In SwiftTUI, Application needs to be initialized. We can use Application(rootView:).
-// However, ModelContext needs to be passed in.
-
 let schema = Schema([TaskItem.self])
-let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+let modelConfiguration = ModelConfiguration(schema: schema, url: URL(fileURLWithPath: "todo.db"))
 do {
     let modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
-    let context = ModelContext(modelContainer)
-
-    let app = Application(rootView: ContentView().environment(\.modelContext, context))
+    let app = Application(rootView: ContentView()).modelContainer(modelContainer)
     try await app.start()
 } catch {
     print("Failed to initialize or run app: \(error)")
