@@ -377,7 +377,44 @@ internal final actor POSIXTerminal: VTTerminal {
 #else
     let pfnWrite = unistd.write
 #endif
-    _ = pfnWrite(self.hOut, string, string.utf8.count)
+    string.utf8.withContiguousStorageIfAvailable { view -> Void in
+        var totalWritten = 0
+        let totalBytes = view.count
+        guard let baseAddress = view.baseAddress else { return }
+        let ptr = UnsafeRawPointer(baseAddress)
+        
+        while totalWritten < totalBytes {
+            let written = pfnWrite(self.hOut, ptr.advanced(by: totalWritten), totalBytes - totalWritten)
+            if written < 0 {
+                if errno == EINTR { continue }
+                break // Unrecoverable error
+            }
+            if written == 0 {
+                break // EOF or no space
+            }
+            totalWritten += written
+        }
+    } ?? {
+        let array = Array(string.utf8)
+        array.withUnsafeBufferPointer { view -> Void in
+            var totalWritten = 0
+            let totalBytes = view.count
+            guard let baseAddress = view.baseAddress else { return }
+            let ptr = UnsafeRawPointer(baseAddress)
+            
+            while totalWritten < totalBytes {
+                let written = pfnWrite(self.hOut, ptr.advanced(by: totalWritten), totalBytes - totalWritten)
+                if written < 0 {
+                    if errno == EINTR { continue }
+                    break
+                }
+                if written == 0 {
+                    break
+                }
+                totalWritten += written
+            }
+        }
+    }()
   }
 }
 

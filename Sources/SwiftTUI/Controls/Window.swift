@@ -19,7 +19,12 @@ import Foundation
         return layer
     }
 
-    func cell(at position: Position) -> Cell? {
-        Cell(char: " ")
+    func draw(into buffer: inout ScreenBuffer) {
+        let cell = Cell(char: " ")
+        for y in 0 ..< layer.frame.size.height.intValue {
+            for x in 0 ..< layer.frame.size.width.intValue {
+                buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
+            }
+        }
     }
 }

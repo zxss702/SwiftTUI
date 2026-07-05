@@ -1,5 +1,18 @@
 import Foundation
 
+private func debugLog(_ msg: String) {
+    let data = (msg + "\n").data(using: .utf8)!
+    if FileManager.default.fileExists(atPath: "/tmp/stui.log") {
+        if let fh = FileHandle(forWritingAtPath: "/tmp/stui.log") {
+            fh.seekToEndOfFile()
+            fh.write(data)
+            fh.closeFile()
+        }
+    } else {
+        FileManager.default.createFile(atPath: "/tmp/stui.log", contents: data)
+    }
+}
+
 @MainActor
 public class Application {
     private let node: Node
@@ -15,7 +28,7 @@ public class Application {
     private var isRunning = false
 
     public init<I: View>(rootView: I) {
-        node = Node(view: VStack(content: rootView).view)
+        node = Node(view: ZStack(alignment: .center) { rootView }.view)
         node.build()
 
         control = node.control!
@@ -58,19 +71,19 @@ public class Application {
             case .resize(let resizeEvent):
                 handleWindowSizeChange(size: resizeEvent.size)
             case .key(let keyEvent):
+                debugLog("KEY: char=\(String(describing: keyEvent.character?.unicodeScalars.map { $0.value })) code=\(keyEvent.keycode)")
                 handleKeyInput(keyEvent)
             case .mouse(let mouseEvent):
+                debugLog("MOUSE: type=\(mouseEvent.type) pos=\(mouseEvent.position)")
                 handleMouseInput(mouseEvent)
             }
             if !isRunning { break }
             
-            // Fix Linux Task starvation: Yield the MainActor so any pending `invalidateNode` tasks 
-            // queued by Observation/GRDB can run before we check `updateScheduled`.
-            await Task.yield()
-            if updateScheduled {
-                try await update()
-            }
-
+            // We do not force Task.yield() or try await update() here.
+            // VTEventStream buffers batched events and returns them without suspending.
+            // By letting the loop run, we process the entire batch synchronously.
+            // The `scheduleUpdate()` task will run naturally when the batch is drained
+            // and `terminal.input` finally suspends to wait for real new input.
             #if canImport(SwiftData)
             // macOS SwiftData relies on CFRunLoop to autosave and post notifications.
             // Since we use an AsyncStream event loop, we manually check and save changes here.
@@ -117,9 +130,17 @@ public class Application {
     func handleKeyInput(_ event: KeyEvent) {
         if (event.character == "c" && event.modifiers.contains(.ctrl)) || event.character == "\u{03}" {
             stop()
-        } else if let ch = event.character {
-            window.firstResponder?.handleEvent(ch)
+            return
+        } 
+        
+        #if DEBUG
+        if event.character == "D" {
+            dumpTree()
+            return
         }
+        #endif
+        
+        window.firstResponder?.handleKeyEvent(event)
     }
 
     private var hoveredControl: Control?
@@ -128,6 +149,22 @@ public class Application {
         let pos = event.position
         
         let target = control.hitTest(position: pos)
+        
+        if case .scroll = event.type {
+            // Log the hit target and its parent chain for scroll events
+            if let t = target {
+                var chain = String(describing: type(of: t))
+                var p = t.parent
+                while let parent = p {
+                    chain += " → " + String(describing: type(of: parent))
+                    p = parent.parent
+                }
+                debugLog("  hitTest chain: \(chain)")
+                debugLog("  scroll frame: \(t.layer.frame)")
+            } else {
+                debugLog("  hitTest: nil")
+            }
+        }
         
         if target !== hoveredControl {
             hoveredControl?.isHovered = false

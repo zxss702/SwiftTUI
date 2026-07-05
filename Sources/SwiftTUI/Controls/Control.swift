@@ -99,15 +99,31 @@ import Foundation
         return maxSize.height - minSize.height
     }
 
+    func updateVisibleRegion(offset: Extended, height: Extended) {
+        for child in children {
+            child.updateVisibleRegion(offset: offset - child.layer.frame.position.line, height: height)
+        }
+    }
+
     // MARK: - Drawing
 
-    func cell(at position: Position) -> Cell? { nil }
+    func draw(into buffer: inout ScreenBuffer) {}
 
     // MARK: - Event handling
 
     func handleEvent(_ char: Character) {
         for subview in children {
             subview.handleEvent(char)
+        }
+    }
+
+    func handleKeyEvent(_ event: KeyEvent) {
+        if let char = event.character {
+            handleEvent(char)
+        } else {
+            for subview in children {
+                subview.handleKeyEvent(event)
+            }
         }
     }
 
