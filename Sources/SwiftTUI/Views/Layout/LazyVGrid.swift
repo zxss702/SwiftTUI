@@ -58,6 +58,7 @@ import Foundation
         var lastHeight: Extended = 100
         private var lastStartIndex: Int?
         private var lastEndIndex: Int?
+        private var lastCalculatedWidth: Extended = -1
 
         private var loadedControls: [Int: Control] = [:]
         private var calculatedColumns: [(width: Extended, xOffset: Extended, alignment: Alignment?)] = []
@@ -67,6 +68,7 @@ import Foundation
             loadedControls.removeAll()
             lastStartIndex = nil
             lastEndIndex = nil
+            lastCalculatedWidth = -1
         }
 
         init(columns: [GridItem], alignment: HorizontalAlignment, spacing: Extended?, estimatedRowHeight: Extended) {
@@ -102,23 +104,26 @@ import Foundation
             lastStartIndex = startIndex
             lastEndIndex = endIndex
             
-            for i in (0 ..< children.count).reversed() {
-                removeSubview(at: i)
-            }
-            
-            var newLoaded: [Int: Control] = [:]
-            for i in startIndex...endIndex {
-                if let existing = loadedControls[i] {
-                    newLoaded[i] = existing
-                } else {
-                    let control = contentNode.control(at: i)
-                    newLoaded[i] = control
+            // ── Incremental diff: only remove items that went off-screen ──
+            var toRemove: [Int] = []
+            for (i, _) in loadedControls {
+                if i < startIndex || i > endIndex {
+                    toRemove.append(i)
                 }
             }
-            loadedControls = newLoaded
-            
+            for i in toRemove {
+                if let ctrl = loadedControls[i],
+                   let idx = children.firstIndex(where: { $0 === ctrl }) {
+                    removeSubview(at: idx)
+                }
+                loadedControls.removeValue(forKey: i)
+            }
+
+            // ── Only add items that are newly visible ──
             for i in startIndex...endIndex {
-                if let control = loadedControls[i] {
+                if loadedControls[i] == nil {
+                    let control = contentNode.control(at: i)
+                    loadedControls[i] = control
                     addSubview(control, at: children.count)
                 }
             }
@@ -128,7 +133,10 @@ import Foundation
 
 
 
+
         private func recalculateLayout(availableWidth: Extended) {
+            guard availableWidth != lastCalculatedWidth else { return }
+            lastCalculatedWidth = availableWidth
             calculatedColumns.removeAll()
             
             var flexIndices: [Int] = []

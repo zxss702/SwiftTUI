@@ -2,12 +2,12 @@
   "originHash" : "a474d2f43dc41e7901699585d9e32ad5085f6beaf6d63686a65007806c2ee35b",
   "pins" : [
     {
-      "identity" : "grdb.swift",
+      "identity" : "jsondata",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/groue/GRDB.swift.git",
+      "location" : "https://github.com/zxss702/JsonData.git",
       "state" : {
-        "revision" : "b83108d10f42680d78f23fe4d4d80fc88dab3212",
-        "version" : "7.11.1"
+        "branch" : "main",
+        "revision" : "7dacacba3b467acaa41f460d13e0819c40a39f82"
       }
     },
     {

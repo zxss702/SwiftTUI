@@ -5,8 +5,8 @@
 
 import WinSDK
 
-private var windowsConsoleCtrlStdinHandle: HANDLE?
-private var windowsConsoleCtrlHandler: (@convention(c) (DWORD) -> WindowsBool)?
+nonisolated(unsafe) private var windowsConsoleCtrlStdinHandle: HANDLE?
+nonisolated(unsafe) private var windowsConsoleCtrlHandler: (@convention(c) (DWORD) -> WindowsBool)?
 
 /// Intercepts Windows console Ctrl+C / Ctrl+Break so they reach the TUI as
 /// key events instead of terminating the process (POSIX raw mode disables ISIG

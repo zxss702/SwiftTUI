@@ -1,17 +1,6 @@
 import Foundation
 
-private func debugLog(_ msg: String) {
-    let data = (msg + "\n").data(using: .utf8)!
-    if FileManager.default.fileExists(atPath: "/tmp/stui.log") {
-        if let fh = FileHandle(forWritingAtPath: "/tmp/stui.log") {
-            fh.seekToEndOfFile()
-            fh.write(data)
-            fh.closeFile()
-        }
-    } else {
-        FileManager.default.createFile(atPath: "/tmp/stui.log", contents: data)
-    }
-}
+
 
 @MainActor
 public class Application {
@@ -26,6 +15,7 @@ public class Application {
     private var isPresenting = false
     private var pendingResizeSize: Size?
     private var isRunning = false
+    private var needsLayout = true
 
     public init<I: View>(rootView: I) {
         node = Node(view: ZStack(alignment: .center) { rootView }.view)
@@ -55,7 +45,7 @@ public class Application {
         await terminal.write("\u{1B}[?1049h\u{1B}[2J\u{1B}[H\u{1B}[?25l\u{1B}[?7l")
         defer {
             let seq = "\u{1B}[?25h\u{1B}[?1049l\u{1B}[?7h"
-            seq.withCString { _ = write(STDOUT_FILENO, $0, strlen($0)) }
+            seq.withCString { _ = write(STDOUT_FILENO, $0, numericCast(strlen($0))) }
             renderer.stop()
         }
         
@@ -67,23 +57,32 @@ public class Application {
         isRunning = true
         for try await event in terminal.input {
             if !isRunning { break }
+            let isScroll: Bool
             switch event {
             case .resize(let resizeEvent):
                 handleWindowSizeChange(size: resizeEvent.size)
+                isScroll = false
             case .key(let keyEvent):
-                debugLog("KEY: char=\(String(describing: keyEvent.character?.unicodeScalars.map { $0.value })) code=\(keyEvent.keycode)")
                 handleKeyInput(keyEvent)
+                isScroll = false
             case .mouse(let mouseEvent):
-                debugLog("MOUSE: type=\(mouseEvent.type) pos=\(mouseEvent.position)")
                 handleMouseInput(mouseEvent)
+                if case .scroll = mouseEvent.type { isScroll = true } else { isScroll = false }
             }
             if !isRunning { break }
             
-            // We do not force Task.yield() or try await update() here.
-            // VTEventStream buffers batched events and returns them without suspending.
-            // By letting the loop run, we process the entire batch synchronously.
-            // The `scheduleUpdate()` task will run naturally when the batch is drained
-            // and `terminal.input` finally suspends to wait for real new input.
+            #if os(Windows)
+            // On Windows, WaitForSingleObject returns immediately for every event,
+            // so the event stream never suspends to let scheduleUpdate()'s Task run.
+            // For scroll events (which are high-frequency), call update() directly
+            // to render each frame without being starved by the input loop.
+            if isScroll {
+                try? await update()
+            } else {
+                await Task.yield()
+            }
+            #endif
+            
             #if canImport(SwiftData)
             // macOS SwiftData relies on CFRunLoop to autosave and post notifications.
             // Since we use an AsyncStream event loop, we manually check and save changes here.
@@ -150,22 +149,8 @@ public class Application {
         
         let target = control.hitTest(position: pos)
         
-        if case .scroll = event.type {
-            // Log the hit target and its parent chain for scroll events
-            if let t = target {
-                var chain = String(describing: type(of: t))
-                var p = t.parent
-                while let parent = p {
-                    chain += " → " + String(describing: type(of: parent))
-                    p = parent.parent
-                }
-                debugLog("  hitTest chain: \(chain)")
-                debugLog("  scroll frame: \(t.layer.frame)")
-            } else {
-                debugLog("  hitTest: nil")
-            }
-        }
-        
+
+
         if target !== hoveredControl {
             hoveredControl?.isHovered = false
             target?.isHovered = true
@@ -185,6 +170,7 @@ public class Application {
     func invalidateNode(_ node: Node) {
         if !invalidatedNodes.contains(where: { $0 === node }) {
             invalidatedNodes.append(node)
+            needsLayout = true
             scheduleUpdate()
         }
     }
@@ -218,6 +204,7 @@ public class Application {
             window.layer.frame.size = size
             vtRenderer?.resize(to: size)
             control.layer.invalidate()
+            needsLayout = true
         }
 
         for node in invalidatedNodes {
@@ -225,7 +212,12 @@ public class Application {
         }
         invalidatedNodes = []
 
-        control.layout(size: window.layer.frame.size)
+        // Only do a full layout pass when data or size actually changed.
+        // Pure scroll events do their own partial layout in the scroll handler.
+        if needsLayout {
+            control.layout(size: window.layer.frame.size)
+            needsLayout = false
+        }
         renderer.update()
         if let vtRenderer = vtRenderer {
             isPresenting = true

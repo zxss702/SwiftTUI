@@ -186,7 +186,8 @@ internal final actor WindowsTerminal: VTTerminal {
     case .raw:
       var rawInMode = dwInMode
       rawInMode &= ~(DWORD(ENABLE_ECHO_INPUT) | DWORD(ENABLE_LINE_INPUT) | DWORD(ENABLE_PROCESSED_INPUT))
-      rawInMode |= DWORD(ENABLE_WINDOW_INPUT)
+      rawInMode &= ~DWORD(0x0040) /* ENABLE_QUICK_EDIT_MODE */
+      rawInMode |= DWORD(ENABLE_WINDOW_INPUT) | DWORD(0x0010) /* ENABLE_MOUSE_INPUT */ | DWORD(0x0080) /* ENABLE_EXTENDED_FLAGS */
       guard SetConsoleMode(self.hIn.handle, rawInMode) else {
         throw WindowsError()
       }

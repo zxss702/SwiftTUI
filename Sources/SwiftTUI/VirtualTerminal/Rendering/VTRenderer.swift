@@ -308,49 +308,6 @@ public final class VTRenderer: @unchecked Sendable {
     }
   }
 
-#if os(Windows)
-  /// Windows Console VT interprets wide characters differently from incremental
-  /// damage spans. Repaint the full logical buffer in cell order instead.
-  private borrowing func paintWindowsBuffer() async {
-    await withBufferedOutput(terminal: terminal) { stream in
-      stream <<< .SetMode([.DEC(.SynchronizedUpdate)])
-      defer { stream <<< .ResetMode([.DEC(.SynchronizedUpdate)]) }
-
-      var tracker = SGRStateTracker()
-      var current = VTPosition(row: .max, column: .max)
-
-      for offset in back.buffer.indices {
-        let cell = back.buffer[offset]
-        if cell.character == "\u{0000}" { continue }
-
-        let position = back.position(at: offset)
-        if position != current {
-          for motion in back.reposition(from: current, to: position) {
-            stream <<< motion
-          }
-        }
-
-        let transition = tracker.transition(to: cell.style)
-        if !transition.isEmpty {
-          stream <<< .SelectGraphicRendition(transition)
-        }
-
-        stream <<< String(cell.character)
-
-        var endOffset = offset + 1
-        while endOffset < back.buffer.count && back.buffer[endOffset].character == "\u{0000}" {
-          endOffset += 1
-        }
-
-        let deferred = back.position(at: offset).column == back.size.widthInt
-        current = back.position(at: offset + (deferred ? 0 : 1))
-      }
-
-      stream <<< .SelectGraphicRendition([.Reset])
-    }
-  }
-#endif
-
   /// Presents the back buffer to the terminal and swaps buffers.
   ///
   /// This method performs the core double-buffering operation:
@@ -384,13 +341,7 @@ public final class VTRenderer: @unchecked Sendable {
       await terminal.write("\u{1B}[2J\u{1B}[H")
       needsClear = false
     }
-#if os(Windows)
-    if !damages(from: front, to: back).isEmpty {
-      await paintWindowsBuffer()
-    }
-#else
     await paint(damages(from: front, to: back))
-#endif
     swap(&front, &back)
     back.copy(from: front)
   }

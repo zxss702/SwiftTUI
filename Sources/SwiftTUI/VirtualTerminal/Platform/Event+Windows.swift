@@ -17,29 +17,39 @@ extension KeyModifiers {
 
 extension KeyEvent {
   internal static func from(_ record: KEY_EVENT_RECORD) -> KeyEvent {
-    KeyEvent(scalar: UnicodeScalar(record.uChar.UnicodeChar),
-             keycode: record.wVirtualKeyCode,
-             modifiers: .from(record.dwControlKeyState),
-             type: record.bKeyDown == true ? .press : .release)
+    let unicodeChar = record.uChar.UnicodeChar
+    // unicodeChar == 0 means no character (e.g. bare Ctrl/Shift/Alt press).
+    // Map Windows Backspace (0x08, BS) -> 0x7F (DEL) to match macOS/Linux convention.
+    let scalar: UnicodeScalar? = switch unicodeChar {
+      case 0:    nil       // modifier-only key press, no character
+      case 0x08: "\u{7F}"  // Windows Backspace -> DEL (matches macOS/Linux)
+      default:   UnicodeScalar(unicodeChar)
+    }
+    return KeyEvent(scalar: scalar,
+                    keycode: record.wVirtualKeyCode,
+                    modifiers: .from(record.dwControlKeyState),
+                    type: record.bKeyDown == true ? .press : .release)
   }
 }
+
 
 extension MouseEventType {
   internal static func from(_ record: MOUSE_EVENT_RECORD) -> MouseEventType {
     // TODO(compnerd) differentiate between button press/release
-    return switch record.dwEventFlags {
+    switch record.dwEventFlags {
     case MOUSE_MOVED:
-      .move
+      return .move
     case MOUSE_WHEELED:
-      .scroll(deltaX: 0, deltaY: Int(HIWORD(record.dwButtonState)) / 120)
+      return .scroll(deltaX: 0, deltaY: -Int(Int16(bitPattern: HIWORD(record.dwButtonState))) / 120)
     case MOUSE_HWHEELED:
-      .scroll(deltaX: Int(HIWORD(record.dwButtonState)) / 120, deltaY: 0)
+      return .scroll(deltaX: Int(Int16(bitPattern: HIWORD(record.dwButtonState))) / 120, deltaY: 0)
     default:
-      .pressed(MouseButton([
+      let buttons = MouseButton([
         record.dwButtonState & FROM_LEFT_1ST_BUTTON_PRESSED == 0 ? nil : .left,
         record.dwButtonState & RIGHTMOST_BUTTON_PRESSED == 0 ? nil : .right,
         record.dwButtonState & FROM_LEFT_2ND_BUTTON_PRESSED == 0 ? nil : .middle,
-      ].compactMap { $0 }))
+      ].compactMap { $0 })
+      return buttons.isEmpty ? .released(.left) : .pressed(buttons)
     }
   }
 }

@@ -70,27 +70,12 @@ extension UnicodeScalar {
   }
 
   package var width: Int {
-#if os(Windows)
-    // Control characters have zero width
-    if value < 0x20 || (0x7f ..< 0xa0).contains(value) { return 0 }
-    if isZeroWidth { return 0 }
-    // Windows Console renders CJK as double-width cells. GetStringTypeW's
-    // C3_FULLWIDTH bit is not set for all ideographs, so rely on Unicode ranges.
-    if isWideCharacter { return 2 }
-    return 1
-#elseif os(Linux)
-    // Control characters have zero width
-    if value < 0x20 || (0x7f ..< 0xa0).contains(value) { return 0 }
-    if isZeroWidth { return 0 }
-    return isWideCharacter ? 2 : 1
-#else
     // Darwin/macOS: use wide character detection
     // Zero-width combining characters return 0
     if isZeroWidth { return 0 }
     // Wide characters (CJK, etc.) return 2
     // Normal width characters return 1
     return isWideCharacter ? 2 : 1
-#endif
   }
 }
 

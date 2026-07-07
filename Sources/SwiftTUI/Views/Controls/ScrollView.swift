@@ -57,13 +57,6 @@ import Foundation
                 let maxOffset = max(Extended(0), contentSize.height - layer.frame.size.height)
                 contentOffset = min(max(Extended(0), contentOffset), maxOffset)
                 
-                let msg = "  ScrollControl: offset=\(contentOffset) maxOff=\(maxOffset) frameH=\(layer.frame.size.height) contentH=\(contentSize.height)\n"
-                if let fh = FileHandle(forWritingAtPath: "/tmp/stui.log") {
-                    fh.seekToEndOfFile()
-                    fh.write(msg.data(using: .utf8)!)
-                    fh.closeFile()
-                }
-                
                 // Tell lazy children the new visible region BEFORE layout
                 contentControl.updateVisibleRegion(offset: contentOffset, height: layer.frame.size.height)
                 contentControl.layout(size: contentSize)
