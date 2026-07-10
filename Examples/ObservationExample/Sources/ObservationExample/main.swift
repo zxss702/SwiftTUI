@@ -50,6 +50,7 @@ struct BindingChildView: View {
 @MainActor
 struct RootView: View {
     @State var state = AppState()
+    @Environment(\.dismiss) var dismiss
 
     var body: some View {
         VStack(alignment: .center) {
@@ -77,7 +78,7 @@ struct RootView: View {
             Spacer()
             
             Button("Quit") {
-                exit(0)
+                dismiss()
             }
         }
         .environment(state)
