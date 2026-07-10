@@ -79,16 +79,36 @@ private struct NavigationBar: View {
     let navigateBack: () -> Void
 
     var body: some View {
-        HStack {
+        let toolbar = context.currentToolbar
+
+        HStack(spacing: 1) {
             if context.canPop {
                 Button(context.backButtonLabel, action: navigateBack)
             }
+            if let leading = toolbar.leading {
+                leading
+            }
+
+            middle(toolbar: toolbar)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if let trailing = toolbar.trailing {
+                trailing
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 1)
+    }
+
+    @ViewBuilder
+    private func middle(toolbar: NavigationToolbarContent) -> some View {
+        if let principal = toolbar.principal {
+            principal
+        } else {
             Text(context.currentTitle)
                 .bold()
                 .lineLimit(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(height: 1)
     }
 }
 

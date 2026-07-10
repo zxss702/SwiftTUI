@@ -65,6 +65,13 @@ struct NavigationRootID: Hashable {
     /// 页面标题：key 为页面 id（根页用 `NavigationRootID`，其余为栈上的值）
     var titles: [AnyHashable: String] = [:]
 
+    /// 各页工具栏三槽；写入时 bump `toolbarEpoch` 以刷新 NavigationBar。
+    @ObservationIgnored
+    var toolbars: [AnyHashable: NavigationToolbarContent] = [:]
+
+    /// NavigationBar 观察此值以在 toolbar 内容变化时刷新。
+    var toolbarEpoch: Int = 0
+
     /// 当前页 id
     var currentPageID: AnyHashable {
         stack.last ?? AnyHashable(NavigationRootID.shared)
@@ -119,6 +126,8 @@ struct NavigationRootID: Hashable {
         let removed = stack.removeLast()
         directDestinations.removeValue(forKey: removed)
         titles.removeValue(forKey: removed)
+        toolbars.removeValue(forKey: removed)
+        toolbarEpoch &+= 1
         syncToBinding()
     }
 
@@ -144,6 +153,28 @@ struct NavigationRootID: Hashable {
     func setTitle(_ title: String, for id: AnyHashable) {
         guard titles[id] != title else { return }
         titles[id] = title
+    }
+
+    /// 由页面 `.toolbar` 在每次 body 求值时上报到当前页 id
+    func setToolbarForCurrentPage(_ content: NavigationToolbarContent) {
+        setToolbar(content, for: currentPageID)
+    }
+
+    func setToolbar(_ content: NavigationToolbarContent, for id: AnyHashable) {
+        toolbars[id] = content
+        // 异步 bump，避免在页面 body 的 Observation 追踪里读写 epoch 造成循环刷新
+        Task { @MainActor [weak self] in
+            self?.toolbarEpoch &+= 1
+        }
+    }
+
+    func toolbar(for id: AnyHashable) -> NavigationToolbarContent {
+        toolbars[id] ?? .empty
+    }
+
+    var currentToolbar: NavigationToolbarContent {
+        _ = toolbarEpoch
+        return toolbar(for: currentPageID)
     }
 
     func destinationView(for value: AnyHashable) -> AnyView? {
