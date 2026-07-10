@@ -24,11 +24,30 @@ import Foundation
         node.children[0].update(using: content.view)
     }
 
-    private class ScrollControl: Control {
+    private class ScrollControl: Control, ScrollToIdentityBridging {
         var contentControl: Control!
         /// Cached content size from the last full layout; used to clamp scroll without re-measuring.
         var cachedContentSize: Size = .zero
         var contentOffset: Extended = 0
+
+        func scrollToIdentity(_ id: AnyHashable) {
+            guard let target = findIdentity(id, in: contentControl) else { return }
+            let absolute = target.absoluteFrame.position.line
+            let contentOrigin = contentControl.absoluteFrame.position.line
+            let destination = absolute - contentOrigin
+            contentOffset = destination
+            applyScrollOffset()
+        }
+
+        private func findIdentity(_ id: AnyHashable, in control: Control) -> IdentityAnchorControl? {
+            if let anchor = control as? IdentityAnchorControl, anchor.id == id {
+                return anchor
+            }
+            for child in control.children {
+                if let found = findIdentity(id, in: child) { return found }
+            }
+            return nil
+        }
 
         /// 高度按内容收缩；仅当内容超过提案高度时才占满提案高度（由外层决定上限）。
         override func size(proposedSize: Size) -> Size {
