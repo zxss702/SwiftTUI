@@ -30,6 +30,9 @@ import Foundation
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: label.view)
+        let control = node.control as! ButtonControl
+        control.action = action
+        control.hover = hover
     }
 
     private class ButtonControl: Control {

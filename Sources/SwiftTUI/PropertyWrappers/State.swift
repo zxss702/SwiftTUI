@@ -27,6 +27,8 @@ import Foundation
             if let value = node.state[label] {
                 return value as! T
             }
+            // 首次读取时写入 node.state，否则父视图刷新会丢掉引用类型状态（如 NavigationContext）
+            node.state[label] = initialValue
             return initialValue
         }
         nonmutating set {
@@ -42,12 +44,29 @@ import Foundation
     }
 
     public var projectedValue: Binding<T> {
-        // Note: this works, but it is not as efficient as in SwiftUI.
-        // In SwiftUI, Bindings can actively observe state. If you have a
-        // @State variable in a view that is not directly used in the body,
-        // but only in child views through @Bindings, updating the @Bindings
-        // will only invalidate the child views.
-        Binding<T>(get: { wrappedValue }, set: { wrappedValue = $0 })
+        // 通过 valueReference 捕获，避免 Binding 在 View 副本上失效；
+        // node 已释放时安全 no-op，避免 syncToBinding 时 assertion 闪退。
+        let reference = valueReference
+        let fallback = initialValue
+        return Binding<T>(
+            get: {
+                guard let node = reference.node, let label = reference.label else {
+                    return fallback
+                }
+                if let value = node.state[label] as? T {
+                    return value
+                }
+                node.state[label] = fallback
+                return fallback
+            },
+            set: { newValue in
+                guard let node = reference.node, let label = reference.label else {
+                    return
+                }
+                node.state[label] = newValue
+                node.root.application?.invalidateNode(node)
+            }
+        )
     }
 }
 
