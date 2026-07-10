@@ -78,11 +78,12 @@ import Foundation
             self.estimatedRowHeight = estimatedRowHeight
         }
 
-        override func updateVisibleRegion(offset: Extended, height: Extended) {
+        @discardableResult
+        override func updateVisibleRegion(offset: Extended, height: Extended) -> Bool {
             lastOffset = offset
             lastHeight = height
             
-            guard let contentNode = contentNode, totalChildrenSize > 0 else { return }
+            guard let contentNode = contentNode, totalChildrenSize > 0 else { return false }
 
             let rowHeight = estimatedRowHeight
             let verticalSpacing = spacing ?? 0
@@ -94,13 +95,13 @@ import Foundation
             let startRow = max(0, (offset / rowTotalHeight).intValue - buffer)
             let endRow = min(rowCount - 1, ((offset + safeHeight) / rowTotalHeight).intValue + buffer)
             
-            if startRow > endRow { return }
+            if startRow > endRow { return false }
             
             let itemsPerRow = max(1, calculatedColumns.count)
             let startIndex = min(totalChildrenSize - 1, startRow * itemsPerRow)
             let endIndex = min(totalChildrenSize - 1, (endRow + 1) * itemsPerRow - 1)
             
-            if startIndex == lastStartIndex && endIndex == lastEndIndex { return }
+            if startIndex == lastStartIndex && endIndex == lastEndIndex { return false }
             lastStartIndex = startIndex
             lastEndIndex = endIndex
             
@@ -129,6 +130,7 @@ import Foundation
             }
             
             layer.invalidate()
+            return true
         }
 
 

@@ -10,12 +10,27 @@ import Foundation
 
     weak var renderer: Renderer?
 
+    private var suppressFrameInvalidation = false
+
     var frame: Rect = .zero {
         didSet {
-            if oldValue != frame {
+            if !suppressFrameInvalidation, oldValue != frame {
                 parent?.invalidate(rect: oldValue)
                 parent?.invalidate(rect: frame)
             }
+        }
+    }
+
+    /// Updates `frame`. When `invalidate` is false, skips the usual old/new frame
+    /// dirty propagation (used by ScrollView to move content without dirtying the
+    /// full content height).
+    func setFrame(_ newFrame: Rect, invalidate: Bool = true) {
+        if invalidate {
+            frame = newFrame
+        } else {
+            suppressFrameInvalidation = true
+            frame = newFrame
+            suppressFrameInvalidation = false
         }
     }
 
@@ -39,17 +54,22 @@ import Foundation
     /// This recursively invalidates the same rect in the parent, in the
     /// parent's coordinate system.
     /// If the parent is the root layer, it sets the `invalidated` rect instead.
+    /// Dirty rects are clipped to this layer's bounds so clipped children
+    /// (e.g. ScrollView content) cannot expand the dirty region beyond the viewport.
     func invalidate(rect: Rect) {
+        let bounds = Rect(position: .zero, size: frame.size)
+        guard let clipped = rect.intersection(with: bounds) else { return }
+
         if let parent = self.parent {
-            parent.invalidate(rect: Rect(position: rect.position + frame.position, size: rect.size))
+            parent.invalidate(rect: Rect(position: clipped.position + frame.position, size: clipped.size))
             return
         }
         renderer?.application?.scheduleUpdate()
         guard let invalidated = self.invalidated else {
-            self.invalidated = rect
+            self.invalidated = clipped
             return
         }
-        self.invalidated = rect.union(invalidated)
+        self.invalidated = clipped.union(invalidated)
     }
 
     func draw(into buffer: inout ScreenBuffer) {

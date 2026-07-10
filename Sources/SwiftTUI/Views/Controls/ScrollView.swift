@@ -26,45 +26,89 @@ import Foundation
 
     private class ScrollControl: Control {
         var contentControl: Control!
-        var contentOffset: Extended = 0 {
-            didSet {
-                contentControl.updateVisibleRegion(offset: contentOffset, height: layer.frame.size.height)
+        /// Cached content size from the last full layout; used to clamp scroll without re-measuring.
+        var cachedContentSize: Size = .zero
+        var contentOffset: Extended = 0
+
+        /// 高度按内容收缩；仅当内容超过提案高度时才占满提案高度（由外层决定上限）。
+        override func size(proposedSize: Size) -> Size {
+            let contentSize = contentControl.size(
+                proposedSize: Size(width: proposedSize.width, height: .infinity)
+            )
+            let height: Extended
+            if proposedSize.height == .infinity {
+                height = contentSize.height
+            } else {
+                height = min(contentSize.height, proposedSize.height)
             }
+            let width: Extended
+            if proposedSize.width == .infinity {
+                width = contentSize.width
+            } else {
+                width = min(max(contentSize.width, 1), proposedSize.width)
+            }
+            return Size(width: width, height: height)
         }
 
         override func layout(size: Size) {
             super.layout(size: size)
-            contentControl.updateVisibleRegion(offset: contentOffset, height: size.height)
             let contentSize = contentControl.size(proposedSize: Size(width: size.width, height: .infinity))
+            cachedContentSize = contentSize
+            // Viewport or content height may have changed (e.g. window resize);
+            // re-clamp so a previous "scrolled to bottom" offset does not leave
+            // the bottom content floating in the middle of a taller viewport.
+            let maxOffset = max(Extended(0), contentSize.height - size.height)
+            contentOffset = min(max(Extended(0), contentOffset), maxOffset)
+            contentControl.updateVisibleRegion(offset: contentOffset, height: size.height)
             contentControl.layout(size: contentSize)
-            contentControl.layer.frame.position.line = -contentOffset
+            applyContentOffset(invalidateLayer: true)
         }
 
         override func scroll(to position: Position) {
             let destination = position.line - contentControl.layer.frame.position.line
             guard layer.frame.size.height > 0 else { return }
+            let previous = contentOffset
             if contentOffset > destination {
                 contentOffset = destination
             } else if contentOffset < destination - layer.frame.size.height + 1 {
                 contentOffset = destination - layer.frame.size.height + 1
+            }
+            if contentOffset != previous {
+                applyScrollOffset()
             }
         }
 
         override func handleMouseEvent(_ event: MouseEvent) {
             if case .scroll(_, let deltaY) = event.type {
                 contentOffset += Extended(deltaY)
-                let contentSize = contentControl.size(proposedSize: Size(width: layer.frame.size.width, height: .infinity))
-                let maxOffset = max(Extended(0), contentSize.height - layer.frame.size.height)
-                contentOffset = min(max(Extended(0), contentOffset), maxOffset)
-                
-                // Tell lazy children the new visible region BEFORE layout
-                contentControl.updateVisibleRegion(offset: contentOffset, height: layer.frame.size.height)
-                contentControl.layout(size: contentSize)
-                contentControl.layer.frame.position.line = -contentOffset
-                layer.invalidate()
+                applyScrollOffset()
             } else {
                 super.handleMouseEvent(event)
             }
+        }
+
+        /// Clamps offset, updates lazy visible region, optionally lays out, then moves content.
+        private func applyScrollOffset() {
+            let viewportHeight = layer.frame.size.height
+            let maxOffset = max(Extended(0), cachedContentSize.height - viewportHeight)
+            contentOffset = min(max(Extended(0), contentOffset), maxOffset)
+
+            let lazyNeedsLayout = contentControl.updateVisibleRegion(
+                offset: contentOffset,
+                height: viewportHeight
+            )
+            if lazyNeedsLayout {
+                contentControl.layout(size: cachedContentSize)
+            }
+
+            applyContentOffset(invalidateLayer: false)
+            layer.invalidate()
+        }
+
+        private func applyContentOffset(invalidateLayer: Bool) {
+            var contentFrame = contentControl.layer.frame
+            contentFrame.position.line = -contentOffset
+            contentControl.layer.setFrame(contentFrame, invalidate: invalidateLayer)
         }
     }
 }

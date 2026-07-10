@@ -70,11 +70,12 @@ import Foundation
             self.spacing = spacing
         }
 
-        override func updateVisibleRegion(offset: Extended, height: Extended) {
+        @discardableResult
+        override func updateVisibleRegion(offset: Extended, height: Extended) -> Bool {
             lastOffset = offset
             lastHeight = height
             
-            guard let contentNode = contentNode, totalChildrenSize > 0 else { return }
+            guard let contentNode = contentNode, totalChildrenSize > 0 else { return false }
 
             let estimatedRowHeight: Extended = 1 + spacing
             let buffer: Int = 5 // Load a few items before and after
@@ -86,34 +87,37 @@ import Foundation
             let startIndex = max(0, offsetInt - buffer)
             let endIndex = min(totalChildrenSize - 1, endOffsetInt + buffer)
             
-            if startIndex > endIndex { return }
-            if startIndex == lastStartIndex && endIndex == lastEndIndex { return }
+            if startIndex > endIndex { return false }
+            if startIndex == lastStartIndex && endIndex == lastEndIndex { return false }
             lastStartIndex = startIndex
             lastEndIndex = endIndex
             
-            // Rebuild children
-            for i in (0 ..< children.count).reversed() {
-                removeSubview(at: i)
-            }
-            
-            var newLoaded: [Int: Control] = [:]
-            for i in startIndex...endIndex {
-                if let existing = loadedControls[i] {
-                    newLoaded[i] = existing
-                } else {
-                    let control = contentNode.control(at: i)
-                    newLoaded[i] = control
+            // Incremental diff: only remove items that went off-screen
+            var toRemove: [Int] = []
+            for (i, _) in loadedControls {
+                if i < startIndex || i > endIndex {
+                    toRemove.append(i)
                 }
             }
-            loadedControls = newLoaded
-            
+            for i in toRemove {
+                if let ctrl = loadedControls[i],
+                   let idx = children.firstIndex(where: { $0 === ctrl }) {
+                    removeSubview(at: idx)
+                }
+                loadedControls.removeValue(forKey: i)
+            }
+
+            // Only add items that are newly visible
             for i in startIndex...endIndex {
-                if let control = loadedControls[i] {
+                if loadedControls[i] == nil {
+                    let control = contentNode.control(at: i)
+                    loadedControls[i] = control
                     addSubview(control, at: children.count)
                 }
             }
             
             layer.invalidate()
+            return true
         }
 
         override func size(proposedSize: Size) -> Size {

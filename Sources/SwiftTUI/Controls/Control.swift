@@ -99,10 +99,17 @@ import Foundation
         return maxSize.height - minSize.height
     }
 
-    func updateVisibleRegion(offset: Extended, height: Extended) {
+    /// Propagates the visible scroll window to lazy descendants.
+    /// Returns `true` if any lazy control rebuilt its children and needs layout.
+    @discardableResult
+    func updateVisibleRegion(offset: Extended, height: Extended) -> Bool {
+        var needsLayout = false
         for child in children {
-            child.updateVisibleRegion(offset: offset - child.layer.frame.position.line, height: height)
+            if child.updateVisibleRegion(offset: offset - child.layer.frame.position.line, height: height) {
+                needsLayout = true
+            }
         }
+        return needsLayout
     }
 
     // MARK: - Drawing
