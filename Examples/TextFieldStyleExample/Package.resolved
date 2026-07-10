@@ -1,0 +1,24 @@
+{
+  "originHash" : "e3ad9c038840e917b328239be963f9086b46f8abe6a6ad0de1dfe04b1f16ff8f",
+  "pins" : [
+    {
+      "identity" : "jsondata",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/zxss702/JsonData.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "7dacacba3b467acaa41f460d13e0819c40a39f82"
+      }
+    },
+    {
+      "identity" : "swift-syntax",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftlang/swift-syntax.git",
+      "state" : {
+        "revision" : "79e4b74a295b6eb74a8b585e3a39d29e70c1dbd1",
+        "version" : "603.0.2"
+      }
+    }
+  ],
+  "version" : 3
+}
