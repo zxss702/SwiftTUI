@@ -56,7 +56,7 @@ import Foundation
         override func size(proposedSize: Size) -> Size {
             var size: Size = .zero
             var remainingItems = children.count
-            for control in children.sorted(by: { $0.horizontalFlexibility(height: proposedSize.height) < $1.horizontalFlexibility(height: proposedSize.height) }) {
+            for control in children.sorted(by: Self.layoutOrder(height: proposedSize.height)) {
                 let remainingWidth = (size.width == .infinity) ? .infinity : (proposedSize.width - size.width)
                 let childSize = control.size(proposedSize: Size(width: remainingWidth / Extended(remainingItems), height: proposedSize.height))
                 size.width += childSize.width
@@ -73,7 +73,7 @@ import Foundation
             super.layout(size: size)
             var remainingItems = children.count
             var remainingWidth = size.width
-            for control in children.sorted(by: { $0.horizontalFlexibility(height: size.height) < $1.horizontalFlexibility(height: size.height) }) {
+            for control in children.sorted(by: Self.layoutOrder(height: size.height)) {
                 let childSize = control.size(proposedSize: Size(width: remainingWidth / Extended(remainingItems), height: size.height))
                 control.layout(size: childSize)
                 if remainingItems > 1 {
@@ -104,5 +104,13 @@ import Foundation
             }
         }
 
+        private static func layoutOrder(height: Extended) -> (Control, Control) -> Bool {
+            { a, b in
+                if a.layoutPriority != b.layoutPriority {
+                    return a.layoutPriority > b.layoutPriority
+                }
+                return a.horizontalFlexibility(height: height) < b.horizontalFlexibility(height: height)
+            }
+        }
     }
 }

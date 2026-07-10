@@ -57,12 +57,20 @@ import Foundation
             root.window?.firstResponder = root.firstSelectableElement
             root.window?.firstResponder?.becomeFirstResponder()
         }
+        children[index].willRemoveFromParent()
         assignWindow(nil, to: children[index])
         children[index].parent = nil
         self.children.remove(at: index)
         layer.removeLayer(at: index)
         for i in index ..< children.count {
             children[i].index = i
+        }
+    }
+
+    /// 子树即将从父控件移除时调用（用于 onDisappear 等）。
+    func willRemoveFromParent() {
+        for child in children {
+            child.willRemoveFromParent()
         }
     }
 
@@ -106,6 +114,9 @@ import Foundation
         let maxSize = size(proposedSize: Size(width: width, height: .infinity))
         return maxSize.height - minSize.height
     }
+
+    /// 同栈内更高优先级的子视图优先获得空间（对齐 SwiftUI）。
+    var layoutPriority: Double { 0 }
 
     /// Propagates the visible scroll window to lazy descendants.
     /// Returns `true` if any lazy control rebuilt its children and needs layout.
@@ -175,7 +186,7 @@ import Foundation
 
     var selectable: Bool { false }
 
-    final var firstSelectableElement: Control? {
+    var firstSelectableElement: Control? {
         if selectable { return self }
         for control in children {
             if let element = control.firstSelectableElement { return element }
