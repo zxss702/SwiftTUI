@@ -7,6 +7,9 @@ import Foundation
 
     var firstResponder: Control?
 
+    /// 拖动手势等：按下后捕获 move/release，避免 hitTest 随光标漂移。
+    weak var mouseCapture: Control?
+
     /// 应用级弹出层；由 `Application` 注入，供弹出菜单等 Control 回调使用。
     weak var popupPresenter: PopupPresenter?
 

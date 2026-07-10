@@ -93,16 +93,10 @@ public class Application {
             }
             if !isRunning { break }
             
-            // Scroll events are high-frequency; present immediately so the viewport
-            // tracks the wheel. On Windows, WaitForSingleObject never suspends the
-            // stream, so scheduleUpdate()'s Task would otherwise be starved.
-            // On POSIX, a buffered burst of wheel events can also delay paint.
-            if isScroll {
+            // 键鼠与滚动都立刻刷新：否则 Binding/@State 要等下一次输入才上屏
+            //（POSIX 上 scheduleUpdate 的 Task 会被 input await 饿死）。
+            if updateScheduled || isScroll {
                 try? await update()
-            } else {
-                #if os(Windows)
-                await Task.yield()
-                #endif
             }
             
             #if canImport(SwiftData)
@@ -168,6 +162,20 @@ public class Application {
 
     private func handleMouseInput(_ event: MouseEvent) {
         let pos = event.position
+
+        // 拖动手势捕获：move/release 交给按下时的控件
+        if let capture = window.mouseCapture {
+            switch event.type {
+            case .move, .released:
+                capture.handleMouseEvent(event)
+                if case .released = event.type {
+                    window.mouseCapture = nil
+                }
+                return
+            default:
+                break
+            }
+        }
 
         let target = control.hitTest(position: pos)
 
