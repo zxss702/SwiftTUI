@@ -74,11 +74,11 @@ struct PresentationExampleApp: View {
                 Button("Close") { sheetItem = nil }
             }
         }
-        .alert("Confirm", isPresented: $showAlert) {
-            Button("OK", role: nil) { status = "Alert OK" }
-            Button("Cancel", role: .cancel) { status = "Alert cancelled" }
+        .alert("确认", isPresented: $showAlert) {
+            Button(role: nil) { status = "已确定" }
+            Button(role: .cancel) { status = "已取消" }
         } message: {
-            Text("Use Esc or tap a button.")
+            Text("按 Esc 或点按钮关闭。")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

@@ -98,7 +98,7 @@ public extension View {
 
 // MARK: - Alert chrome
 
-/// 宽度由标题/正文决定；按钮行均分该宽度（先声明的在左，如 OK | Cancel），不撑满窗口。
+/// 宽度由标题/正文决定；按钮行均分该宽度（先声明的在左，如 确定 | 取消），不撑满窗口。
 @MainActor
 struct AlertContent<Message: View, Actions: View>: View, PrimitiveView, LayoutRootView {
     let title: String

@@ -9,8 +9,8 @@ import Foundation
 }
 
 public extension Button where Label == AnyView {
-    /// `Button("Cancel", role: .cancel) { … }`
-    /// Alert 等场景：文案默认加粗；destructive 为红色。
+    /// `Button("取消", role: .cancel) { … }`
+    /// Alert / confirmationDialog：文案默认加粗；destructive 为红色。
     init(_ title: String, role: ButtonRole?, action: @escaping () -> Void) {
         let labeled: AnyView
         switch role {
@@ -22,5 +22,19 @@ public extension Button where Label == AnyView {
         self.label = VStack(content: labeled)
         self.action = action
         self.hover = {}
+    }
+
+    /// 默认中文文案：`nil` → 确定，`.cancel` → 取消，`.destructive` → 删除。
+    init(role: ButtonRole?, action: @escaping () -> Void) {
+        let title: String
+        switch role {
+        case .some(let r) where r == .cancel:
+            title = "取消"
+        case .some(let r) where r == .destructive:
+            title = "删除"
+        default:
+            title = "确定"
+        }
+        self.init(title, role: role, action: action)
     }
 }
