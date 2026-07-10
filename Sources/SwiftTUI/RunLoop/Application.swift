@@ -34,6 +34,15 @@ public class Application {
 
         node.application = self
         renderer.application = self
+
+        // 将 dismiss 注入到根节点环境，View 内通过 @Environment(\.dismiss) 获取
+        let oldEnv = self.node.environment
+        self.node.environment = { [weak self] env in
+            oldEnv?(&env)
+            env.dismiss = DismissAction {
+                self?.stop()
+            }
+        }
     }
 
     public func start() async throws {
