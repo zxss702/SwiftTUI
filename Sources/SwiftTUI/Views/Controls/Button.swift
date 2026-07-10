@@ -70,11 +70,13 @@ import Foundation
         }
 
         private func performAction() {
-            let wasPresented = window?.popupPresenter?.isPresented ?? false
+            let presenter = window?.popupPresenter
+            let wasPresented = presenter?.isPresented ?? false
+            let kind = presenter?.kind
             action()
-            // 弹出层已打开时点击其中的按钮则关闭；本次 action 刚打开的不关
-            if wasPresented, window?.popupPresenter?.isPresented == true {
-                window?.popupPresenter?.dismiss()
+            // Menu / Alert：点按钮后关闭（不依赖 action 之后仍 isPresented）
+            if wasPresented, kind == .menu || kind == .alert {
+                presenter?.dismiss()
             }
         }
 

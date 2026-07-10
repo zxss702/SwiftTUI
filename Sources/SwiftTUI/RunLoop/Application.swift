@@ -171,9 +171,10 @@ public class Application {
 
         let target = control.hitTest(position: pos)
 
-        // 外点关闭：先把事件交给下层，再 dismiss，这样「不影响点击」
+        // 外点关闭：menu/popover 先把事件交给下层再 dismiss；sheet/alert 由遮罩自己处理
         let shouldDismissPopup: Bool = {
             guard let presenter = window.popupPresenter, presenter.isPresented else { return false }
+            if presenter.blocksUnderlyingHits { return false }
             guard let frame = presenter.panelFrame else { return false }
             switch event.type {
             case .released(.left), .released(.right):
