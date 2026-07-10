@@ -22,9 +22,19 @@ struct DismissActionKey: EnvironmentKey {
     })
 }
 
+/// Alert / Menu 内按钮点击后是否自动 dismiss 当前 present。
+struct ButtonDismissesPresentationKey: EnvironmentKey {
+    @MainActor static let defaultValue: Bool = false
+}
+
 public extension EnvironmentValues {
     var dismiss: DismissAction {
         get { self[DismissActionKey.self] }
         set { self[DismissActionKey.self] = newValue }
+    }
+
+    var buttonDismissesPresentation: Bool {
+        get { self[ButtonDismissesPresentationKey.self] }
+        set { self[ButtonDismissesPresentationKey.self] = newValue }
     }
 }

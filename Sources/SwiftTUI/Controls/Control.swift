@@ -39,7 +39,7 @@ import Foundation
         self.children.insert(view, at: index)
         layer.addLayer(view.layer, at: index)
         view.parent = self
-        view.window = window
+        assignWindow(window, to: view)
         for i in index ..< children.count {
             children[i].index = i
         }
@@ -57,12 +57,20 @@ import Foundation
             root.window?.firstResponder = root.firstSelectableElement
             root.window?.firstResponder?.becomeFirstResponder()
         }
-        children[index].window = nil
+        assignWindow(nil, to: children[index])
         children[index].parent = nil
         self.children.remove(at: index)
         layer.removeLayer(at: index)
         for i in index ..< children.count {
             children[i].index = i
+        }
+    }
+
+    /// 子树在 addSubview 时可能已有后代，需递归注入 window（否则面板内 Button 拿不到 popupPresenter）。
+    private func assignWindow(_ window: Window?, to control: Control) {
+        control.window = window
+        for child in control.children {
+            assignWindow(window, to: child)
         }
     }
 

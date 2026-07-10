@@ -5,6 +5,9 @@ import Foundation
     let hover: () -> Void
     let action: () -> Void
 
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.buttonDismissesPresentation) private var buttonDismissesPresentation
+
     public init(action: @escaping () -> Void, hover: @escaping () -> Void = {}, @ViewBuilder label: () -> Label) {
         self.label = VStack(content: label())
         self.action = action
@@ -20,24 +23,41 @@ import Foundation
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
+        setupEnvironmentProperties(node: node)
         node.addNode(at: 0, Node(view: label.view))
         let control = ButtonControl(action: action, hover: hover)
         control.label = node.children[0].control(at: 0)
         control.addSubview(control.label, at: 0)
+        control.onActivate = makeOnActivate()
         node.control = control
     }
 
     func updateNode(_ node: Node) {
+        setupEnvironmentProperties(node: node)
         node.view = self
         node.children[0].update(using: label.view)
         let control = node.control as! ButtonControl
         control.action = action
         control.hover = hover
+        control.onActivate = makeOnActivate()
+    }
+
+    private func makeOnActivate() -> () -> Void {
+        let action = self.action
+        let dismiss = self.dismiss
+        let autoDismiss = buttonDismissesPresentation
+        return {
+            action()
+            if autoDismiss {
+                dismiss()
+            }
+        }
     }
 
     private class ButtonControl: Control {
         var action: () -> Void
         var hover: () -> Void
+        var onActivate: (() -> Void)?
         var label: Control!
         weak var buttonLayer: ButtonLayer?
 
@@ -45,6 +65,8 @@ import Foundation
             self.action = action
             self.hover = hover
         }
+
+        override var selectable: Bool { true }
 
         override func size(proposedSize: Size) -> Size {
             return label.size(proposedSize: proposedSize)
@@ -70,13 +92,10 @@ import Foundation
         }
 
         private func performAction() {
-            let presenter = window?.popupPresenter
-            let wasPresented = presenter?.isPresented ?? false
-            let kind = presenter?.kind
-            action()
-            // Menu / Alert：点按钮后关闭（不依赖 action 之后仍 isPresented）
-            if wasPresented, kind == .menu || kind == .alert {
-                presenter?.dismiss()
+            if let onActivate {
+                onActivate()
+            } else {
+                action()
             }
         }
 

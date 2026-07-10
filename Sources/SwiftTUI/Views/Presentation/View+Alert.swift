@@ -201,14 +201,25 @@ private final class AlertContentControl: Control {
         let line = headerHeight
 
         for action in actions {
-            let actionHeight = max(
-                Extended(1),
-                action.size(proposedSize: Size(width: eachWidth, height: size.height)).height
-            )
+            let intrinsic = action.size(proposedSize: Size(width: .infinity, height: size.height))
+            let actionHeight = max(Extended(1), intrinsic.height)
+            // 占满各自格子（整块可点），文案在格子内居中
             action.layout(size: Size(width: eachWidth, height: actionHeight))
+            centerLabel(of: action, in: Size(width: eachWidth, height: actionHeight))
             action.layer.frame.position = Position(column: column, line: line)
             column += eachWidth + actionSpacing
         }
+    }
+
+    /// 将按钮标签在已分配的格子内水平/垂直居中。
+    private func centerLabel(of control: Control, in size: Size) {
+        guard let label = control.children.first else { return }
+        let labelSize = label.size(proposedSize: Size(width: .infinity, height: size.height))
+        label.layout(size: labelSize)
+        label.layer.frame.position = Position(
+            column: max(0, (size.width - labelSize.width) / 2),
+            line: max(0, (size.height - labelSize.height) / 2)
+        )
     }
 }
 

@@ -26,35 +26,33 @@ struct PresentationBindingModifier<Content: View, Presented: View>: View {
 
     private func sync() {
         if isPresented {
-            let stillOurs = sessionID != nil && presenter.presentationID == sessionID
+            let stillOurs = sessionID.map { presenter.contains($0) } ?? false
             if !stillOurs {
-                let id = UUID()
-                sessionID = id
                 let binding = $isPresented
                 let onDismiss = self.onDismiss
                 let finish = {
                     if binding.wrappedValue { binding.wrappedValue = false }
                     onDismiss?()
                 }
+                let id: UUID
                 switch kind {
                 case .sheet:
-                    presenter.presentSheet(onDismiss: {
+                    id = presenter.presentSheet(onDismiss: {
                         sessionID = nil
                         finish()
                     }, content: presented)
                 case .alert:
-                    presenter.presentAlert(onDismiss: {
+                    id = presenter.presentAlert(onDismiss: {
                         sessionID = nil
                         finish()
                     }, content: presented)
                 }
-                // present 会换新 presentationID；记下本次
-                sessionID = presenter.presentationID
+                sessionID = id
             }
-        } else if sessionID != nil {
+        } else if let id = sessionID {
             sessionID = nil
-            if presenter.isPresented {
-                presenter.dismiss()
+            if presenter.contains(id) {
+                presenter.dismiss(id: id)
             }
         }
     }
@@ -80,12 +78,11 @@ struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: Vi
 
     private func sync() {
         if let value = item {
-            let stillOurs = sessionID != nil
-                && presenter.presentationID == sessionID
+            let stillOurs = (sessionID.map { presenter.contains($0) } ?? false)
                 && presentedID == value.id
             if !stillOurs {
-                if sessionID != nil {
-                    presenter.dismiss()
+                if let old = sessionID, presenter.contains(old) {
+                    presenter.dismiss(id: old)
                 }
                 presentedID = value.id
                 let binding = $item
@@ -95,29 +92,30 @@ struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: Vi
                     if binding.wrappedValue != nil { binding.wrappedValue = nil }
                     onDismiss?()
                 }
+                let id: UUID
                 switch kind {
                 case .sheet:
-                    presenter.presentSheet(onDismiss: {
+                    id = presenter.presentSheet(onDismiss: {
                         sessionID = nil
                         finish()
                     }) {
                         presented(value)
                     }
                 case .alert:
-                    presenter.presentAlert(onDismiss: {
+                    id = presenter.presentAlert(onDismiss: {
                         sessionID = nil
                         finish()
                     }) {
                         presented(value)
                     }
                 }
-                sessionID = presenter.presentationID
+                sessionID = id
             }
-        } else if sessionID != nil {
+        } else if let id = sessionID {
             sessionID = nil
             presentedID = nil
-            if presenter.isPresented {
-                presenter.dismiss()
+            if presenter.contains(id) {
+                presenter.dismiss(id: id)
             }
         }
     }
@@ -157,21 +155,21 @@ struct PopoverBindingModifier<Content: View, Presented: View>: View, PrimitiveVi
         let binding = isPresented
 
         if binding.wrappedValue {
-            if control.token == nil {
-                let token = UUID()
-                control.token = token
+            let stillOurs = control.token.map { presenter.contains($0) } ?? false
+            if !stillOurs {
                 let body = presented
-                presenter.presentPopover(anchor: control.absoluteFrame, onDismiss: {
+                let id = presenter.presentPopover(anchor: control.absoluteFrame, onDismiss: {
                     control.token = nil
                     if binding.wrappedValue { binding.wrappedValue = false }
                 }) {
                     body()
                 }
+                control.token = id
             }
-        } else if control.token != nil {
+        } else if let id = control.token {
             control.token = nil
-            if presenter.isPresented {
-                presenter.dismiss()
+            if presenter.contains(id) {
+                presenter.dismiss(id: id)
             }
         }
     }
@@ -209,19 +207,27 @@ struct PopoverItemModifier<Content: View, Item: Identifiable, Presented: View>: 
         let binding = item
 
         if let value = binding.wrappedValue {
-            if control.token == nil {
-                control.token = UUID()
-                presenter.presentPopover(anchor: control.absoluteFrame, onDismiss: {
+            let stillOurs = (control.token.map { presenter.contains($0) } ?? false)
+                && control.presentedID == AnyHashable(value.id)
+            if !stillOurs {
+                if let old = control.token, presenter.contains(old) {
+                    presenter.dismiss(id: old)
+                }
+                control.presentedID = AnyHashable(value.id)
+                let id = presenter.presentPopover(anchor: control.absoluteFrame, onDismiss: {
                     control.token = nil
+                    control.presentedID = nil
                     if binding.wrappedValue != nil { binding.wrappedValue = nil }
                 }) {
                     presented(value)
                 }
+                control.token = id
             }
-        } else if control.token != nil {
+        } else if let id = control.token {
             control.token = nil
-            if presenter.isPresented {
-                presenter.dismiss()
+            control.presentedID = nil
+            if presenter.contains(id) {
+                presenter.dismiss(id: id)
             }
         }
     }
@@ -231,6 +237,7 @@ struct PopoverItemModifier<Content: View, Item: Identifiable, Presented: View>: 
 private final class PopoverHostControl: Control {
     var contentControl: Control!
     var token: UUID?
+    var presentedID: AnyHashable?
 
     override func size(proposedSize: Size) -> Size {
         contentControl.size(proposedSize: proposedSize)

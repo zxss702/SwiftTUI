@@ -10,56 +10,138 @@ enum PopupKind: Equatable {
     case alert
 }
 
+// MARK: - Stack entry
+
+/// 单层 present 记录。栈式叠加，便于 sheet / popover / alert / menu 嵌套与后续扩展。
+@MainActor
+final class PresentationRecord: Identifiable {
+    let id: UUID
+    let kind: PopupKind
+    /// 每次刷新重建面板，保证 Binding / 嵌套 present 能随状态更新。
+    let makePanel: () -> AnyView
+    var anchor: Rect
+    var panelFrame: Rect?
+    let onDismiss: () -> Void
+    /// 该层悬浮 Control，dismiss 后把焦点还给新的 top。
+    weak var hostControl: Control?
+    /// 悬浮层 Node，用于状态变化时原地刷新面板内容。
+    weak var layerNode: Node?
+
+    init(
+        id: UUID = UUID(),
+        kind: PopupKind,
+        anchor: Rect,
+        onDismiss: @escaping () -> Void,
+        makePanel: @escaping () -> AnyView
+    ) {
+        self.id = id
+        self.kind = kind
+        self.anchor = anchor
+        self.onDismiss = onDismiss
+        self.makePanel = makePanel
+    }
+
+    var panel: AnyView { makePanel() }
+
+    var blocksUnderlyingHits: Bool {
+        kind == .sheet || kind == .alert
+    }
+}
+
 // MARK: - PopupPresenter
 
-/// 应用级悬浮弹出层。面板不参与原有布局，叠在 Application 最上层。
+/// 应用级悬浮弹出层（**栈**）。新 present 压栈，不替换下层；`dismiss` 默认只弹顶层。
 @Observable
 @MainActor
 public final class PopupPresenter {
-    private(set) var presentationID: UUID?
+    /// 从底到顶的 present 栈。
+    private(set) var stack: [PresentationRecord] = []
 
+    /// 应用状态变化后，在下一帧刷新栈内面板。
     @ObservationIgnored
-    private(set) var panel: AnyView?
+    var needsPanelRefresh = false
 
-    @ObservationIgnored
-    private(set) var anchor: Rect = .zero
+    /// 顶层 id（兼容旧逻辑 / modifier session）。
+    var presentationID: UUID? { stack.last?.id }
 
-    @ObservationIgnored
-    private(set) var kind: PopupKind = .menu
+    var kind: PopupKind { stack.last?.kind ?? .menu }
 
-    @ObservationIgnored
-    var panelFrame: Rect?
+    var panel: AnyView? { stack.last?.panel }
 
-    @ObservationIgnored
-    private var onDismissHandlers: [() -> Void] = []
+    var anchor: Rect {
+        get { stack.last?.anchor ?? .zero }
+        set { stack.last?.anchor = newValue }
+    }
 
-    public var isPresented: Bool { presentationID != nil }
+    var panelFrame: Rect? {
+        get { stack.last?.panelFrame }
+        set { stack.last?.panelFrame = newValue }
+    }
 
-    /// sheet / alert：外点不穿透，由遮罩吞掉点击。
+    public var isPresented: Bool { !stack.isEmpty }
+
+    /// 顶层是否吞掉下层命中（sheet / alert）。
     var blocksUnderlyingHits: Bool {
-        kind == .sheet || kind == .alert
+        stack.last?.blocksUnderlyingHits ?? false
+    }
+
+    var top: PresentationRecord? { stack.last }
+
+    func contains(_ id: UUID) -> Bool {
+        stack.contains { $0.id == id }
+    }
+
+    func record(id: UUID) -> PresentationRecord? {
+        stack.first { $0.id == id }
+    }
+
+    /// 由 Application 在节点失效时标记；update 循环末尾调用 `refreshPresentedPanels`。
+    func noteContentInvalidated() {
+        guard !stack.isEmpty else { return }
+        needsPanelRefresh = true
+    }
+
+    /// 用最新 `makePanel()` 刷新已 present 的内容（嵌套 sheet 的 Binding 依赖此路径）。
+    func refreshPresentedPanels() {
+        guard needsPanelRefresh else { return }
+        needsPanelRefresh = false
+        let records = stack
+        for record in records {
+            guard let node = record.layerNode else { continue }
+            node.update(using: node.view)
+        }
     }
 
     // MARK: - Menu（现有）
 
+    @discardableResult
     public func present<V: View>(
         anchor: Rect,
         onDismiss: @escaping () -> Void = {},
-        @ViewBuilder content: () -> V
-    ) {
-        present(
+        @ViewBuilder content: @escaping () -> V
+    ) -> UUID {
+        let id = UUID()
+        return push(
+            id: id,
             kind: .menu,
             anchor: anchor,
             onDismiss: onDismiss,
-            panel: AnyView(PopupMenuPanel(content: content()))
+            makePanel: { [weak self] in
+                AnyView(
+                    PopupMenuPanel(content: content())
+                        .environment(\.dismiss, DismissAction { self?.dismiss(id: id) })
+                        .environment(\.buttonDismissesPresentation, true)
+                )
+            }
         )
     }
 
     /// 无明确锚点时，居中偏上显示（菜单样式）。
+    @discardableResult
     public func presentCentered<V: View>(
         onDismiss: @escaping () -> Void = {},
-        @ViewBuilder content: () -> V
-    ) {
+        @ViewBuilder content: @escaping () -> V
+    ) -> UUID {
         present(
             anchor: Rect(position: Position(column: 2, line: 2), size: Size(width: 1, height: 1)),
             onDismiss: onDismiss,
@@ -69,75 +151,121 @@ public final class PopupPresenter {
 
     // MARK: - Sheet / Popover / Alert
 
+    @discardableResult
     func presentSheet<V: View>(
         onDismiss: @escaping () -> Void = {},
-        @ViewBuilder content: () -> V
-    ) {
-        present(
+        @ViewBuilder content: @escaping () -> V
+    ) -> UUID {
+        let id = UUID()
+        return push(
+            id: id,
             kind: .sheet,
             anchor: .zero,
             onDismiss: onDismiss,
-            panel: AnyView(SheetPanel(content: dismissable(content())))
+            makePanel: { [weak self] in
+                AnyView(SheetPanel(content: content().environment(\.dismiss, DismissAction {
+                    self?.dismiss(id: id)
+                })))
+            }
         )
     }
 
+    @discardableResult
     func presentPopover<V: View>(
         anchor: Rect,
         onDismiss: @escaping () -> Void = {},
-        @ViewBuilder content: () -> V
-    ) {
-        present(
+        @ViewBuilder content: @escaping () -> V
+    ) -> UUID {
+        let id = UUID()
+        return push(
+            id: id,
             kind: .popover,
             anchor: anchor,
             onDismiss: onDismiss,
-            panel: AnyView(PopoverPanel(content: dismissable(content())))
+            makePanel: { [weak self] in
+                AnyView(PopoverPanel(content: content().environment(\.dismiss, DismissAction {
+                    self?.dismiss(id: id)
+                })))
+            }
         )
     }
 
+    @discardableResult
     func presentAlert<V: View>(
         onDismiss: @escaping () -> Void = {},
-        @ViewBuilder content: () -> V
-    ) {
-        present(
+        @ViewBuilder content: @escaping () -> V
+    ) -> UUID {
+        let id = UUID()
+        return push(
+            id: id,
             kind: .alert,
             anchor: .zero,
             onDismiss: onDismiss,
-            panel: AnyView(AlertPanel(content: dismissable(content())))
+            makePanel: { [weak self] in
+                AnyView(
+                    AlertPanel(content: content())
+                        .environment(\.dismiss, DismissAction { self?.dismiss(id: id) })
+                        .environment(\.buttonDismissesPresentation, true)
+                )
+            }
         )
     }
 
+    /// 关闭顶层。
     public func dismiss() {
-        guard presentationID != nil else { return }
-        presentationID = nil
-        panel = nil
-        panelFrame = nil
-        anchor = .zero
-        kind = .menu
-        let handlers = onDismissHandlers
-        onDismissHandlers = []
-        for handler in handlers { handler() }
+        guard let top else { return }
+        dismiss(id: top.id)
+    }
+
+    /// 关闭指定层，并一并关闭其上的所有层（父级关闭时子 present 跟着走）。
+    public func dismiss(id: UUID) {
+        guard let index = stack.firstIndex(where: { $0.id == id }) else { return }
+        let removed = Array(stack[index...])
+        stack.removeSubrange(index...)
+        for record in removed.reversed() {
+            record.onDismiss()
+        }
+        restoreFocusToTop()
+    }
+
+    /// 清空整栈。
+    public func dismissAll() {
+        guard !stack.isEmpty else { return }
+        let removed = stack
+        stack = []
+        for record in removed.reversed() {
+            record.onDismiss()
+        }
     }
 
     // MARK: - Private
 
-    private func present(kind: PopupKind, anchor: Rect, onDismiss: @escaping () -> Void, panel: AnyView) {
-        if presentationID != nil {
-            let previous = onDismissHandlers
-            onDismissHandlers = []
-            for handler in previous { handler() }
+    @discardableResult
+    private func push(
+        id: UUID = UUID(),
+        kind: PopupKind,
+        anchor: Rect,
+        onDismiss: @escaping () -> Void,
+        makePanel: @escaping () -> AnyView
+    ) -> UUID {
+        // 菜单：同级再开时先收起顶层菜单，避免菜单叠菜单；模态/popover 允许嵌套。
+        if kind == .menu, let top, top.kind == .menu {
+            dismiss(id: top.id)
         }
-        self.kind = kind
-        self.anchor = anchor
-        self.panelFrame = nil
-        self.panel = panel
-        self.onDismissHandlers = [onDismiss]
-        self.presentationID = UUID()
+        let record = PresentationRecord(
+            id: id,
+            kind: kind,
+            anchor: anchor,
+            onDismiss: onDismiss,
+            makePanel: makePanel
+        )
+        stack.append(record)
+        return id
     }
 
-    private func dismissable<V: View>(_ content: V) -> some View {
-        content.environment(\.dismiss, DismissAction { [weak self] in
-            self?.dismiss()
-        })
+    private func restoreFocusToTop() {
+        guard let control = stack.last?.hostControl else { return }
+        stealFocus(control)
     }
 }
 
@@ -148,58 +276,91 @@ struct PopupOverlayHost: View {
     @Environment(PopupPresenter.self) private var presenter
 
     var body: some View {
-        let _ = presenter.presentationID
-        if presenter.presentationID != nil, let panel = presenter.panel {
-            switch presenter.kind {
-            case .menu:
-                FloatingPopupLayer(anchor: presenter.anchor, presenter: presenter, panel: panel)
-            case .popover:
-                PopoverFloatingLayer(anchor: presenter.anchor, presenter: presenter, panel: panel)
-            case .sheet, .alert:
-                ModalFloatingLayer(presenter: presenter, panel: panel)
+        let _ = presenter.stack.map(\.id)
+        ZStack(alignment: .topLeading) {
+            ForEach(presenter.stack) { entry in
+                PresentationChrome(entry: entry, presenter: presenter)
             }
         }
     }
+}
+
+/// 按 kind 分发具体悬浮层；新增 kind 时只扩这里。
+@MainActor
+private struct PresentationChrome: View {
+    let entry: PresentationRecord
+    let presenter: PopupPresenter
+
+    var body: some View {
+        switch entry.kind {
+        case .menu:
+            FloatingPopupLayer(entry: entry, presenter: presenter)
+        case .popover:
+            PopoverFloatingLayer(entry: entry, presenter: presenter)
+        case .sheet, .alert:
+            ModalFloatingLayer(entry: entry, presenter: presenter)
+        }
+    }
+}
+
+// MARK: - Panel attach helper
+
+@MainActor
+private func attachPanel(to host: Control, panel: Control, stored: inout Control!) {
+    if stored === panel, host.children.contains(where: { $0 === panel }) {
+        return
+    }
+    if let stored, let index = host.children.firstIndex(where: { $0 === stored }) {
+        host.removeSubview(at: index)
+    } else {
+        while !host.children.isEmpty {
+            host.removeSubview(at: 0)
+        }
+    }
+    stored = panel
+    host.addSubview(panel, at: 0)
 }
 
 // MARK: - Menu 悬浮层
 
 @MainActor
 private struct FloatingPopupLayer: View, PrimitiveView {
-    let anchor: Rect
+    let entry: PresentationRecord
     let presenter: PopupPresenter
-    let panel: AnyView
 
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
-        node.addNode(at: 0, Node(view: panel.view))
-        let control = FloatingPopupControl(anchor: anchor, presenter: presenter)
-        control.panelControl = node.children[0].control(at: 0)
-        control.addSubview(control.panelControl, at: 0)
+        entry.layerNode = node
+        node.addNode(at: 0, Node(view: entry.makePanel().view))
+        let control = FloatingPopupControl(entry: entry, presenter: presenter)
+        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
+        entry.hostControl = control
         node.control = control
         stealFocus(control)
     }
 
     func updateNode(_ node: Node) {
+        entry.layerNode = node
         node.view = self
-        node.children[0].update(using: panel.view)
+        node.children[0].update(using: entry.makePanel().view)
         let control = node.control as! FloatingPopupControl
-        control.anchor = anchor
+        control.entry = entry
         control.presenter = presenter
-        control.panelControl = node.children[0].control(at: 0)
+        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
+        entry.hostControl = control
         control.layer.invalidate()
     }
 }
 
 @MainActor
 private final class FloatingPopupControl: Control {
-    var anchor: Rect
+    var entry: PresentationRecord
     weak var presenter: PopupPresenter?
     var panelControl: Control!
 
-    init(anchor: Rect, presenter: PopupPresenter) {
-        self.anchor = anchor
+    init(entry: PresentationRecord, presenter: PopupPresenter) {
+        self.entry = entry
         self.presenter = presenter
     }
 
@@ -210,6 +371,7 @@ private final class FloatingPopupControl: Control {
     override func layout(size: Size) {
         super.layout(size: size)
         guard let panelControl else { return }
+        let anchor = entry.anchor
 
         let spaceBelow = max(Extended(1), size.height - (anchor.position.line + max(anchor.size.height, 1)))
         let spaceAbove = max(Extended(1), anchor.position.line)
@@ -239,7 +401,7 @@ private final class FloatingPopupControl: Control {
             line = max(0, size.height - panelSize.height)
         }
         panelControl.layer.frame.position = Position(column: column, line: line)
-        presenter?.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
+        entry.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
     }
 
     override func draw(into buffer: inout ScreenBuffer) {}
@@ -252,7 +414,8 @@ private final class FloatingPopupControl: Control {
 
     override func handleKeyEvent(_ event: KeyEvent) {
         if event.keycode == VTKeyCode.escape || event.character == "\u{1b}" {
-            presenter?.dismiss()
+            guard presenter?.top?.id == entry.id else { return }
+            presenter?.dismiss(id: entry.id)
             return
         }
         super.handleKeyEvent(event)
@@ -263,40 +426,42 @@ private final class FloatingPopupControl: Control {
 
 @MainActor
 private struct PopoverFloatingLayer: View, PrimitiveView {
-    let anchor: Rect
+    let entry: PresentationRecord
     let presenter: PopupPresenter
-    let panel: AnyView
 
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
-        node.addNode(at: 0, Node(view: panel.view))
-        let control = PopoverFloatingControl(anchor: anchor, presenter: presenter)
-        control.panelControl = node.children[0].control(at: 0)
-        control.addSubview(control.panelControl, at: 0)
+        entry.layerNode = node
+        node.addNode(at: 0, Node(view: entry.makePanel().view))
+        let control = PopoverFloatingControl(entry: entry, presenter: presenter)
+        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
+        entry.hostControl = control
         node.control = control
         stealFocus(control)
     }
 
     func updateNode(_ node: Node) {
+        entry.layerNode = node
         node.view = self
-        node.children[0].update(using: panel.view)
+        node.children[0].update(using: entry.makePanel().view)
         let control = node.control as! PopoverFloatingControl
-        control.anchor = anchor
+        control.entry = entry
         control.presenter = presenter
-        control.panelControl = node.children[0].control(at: 0)
+        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
+        entry.hostControl = control
         control.layer.invalidate()
     }
 }
 
 @MainActor
 private final class PopoverFloatingControl: Control {
-    var anchor: Rect
+    var entry: PresentationRecord
     weak var presenter: PopupPresenter?
     var panelControl: Control!
 
-    init(anchor: Rect, presenter: PopupPresenter) {
-        self.anchor = anchor
+    init(entry: PresentationRecord, presenter: PopupPresenter) {
+        self.entry = entry
         self.presenter = presenter
     }
 
@@ -306,37 +471,85 @@ private final class PopoverFloatingControl: Control {
     override func layout(size: Size) {
         super.layout(size: size)
         guard let panelControl else { return }
+        let anchor = entry.anchor
 
-        let spaceBelow = max(Extended(1), size.height - (anchor.position.line + max(anchor.size.height, 1)))
-        let spaceAbove = max(Extended(1), anchor.position.line)
-        let placeBelow = spaceBelow >= 3 || spaceBelow >= spaceAbove
+        let spaceBelow = max(Extended(0), size.height - (anchor.position.line + max(anchor.size.height, 1)))
+        let spaceAbove = max(Extended(0), anchor.position.line)
+        let spaceTrailing = max(Extended(0), size.width - (anchor.position.column + max(anchor.size.width, 1)))
+        let spaceLeading = max(Extended(0), anchor.position.column)
 
-        let maxHeight = max(Extended(2), placeBelow ? spaceBelow : spaceAbove)
+        // 先按「尽量大」测固有尺寸，再按四边空间选型
         let measured = panelControl.size(
-            proposedSize: Size(width: min(max(anchor.size.width + 10, 16), size.width), height: maxHeight)
+            proposedSize: Size(
+                width: max(Extended(6), size.width),
+                height: max(Extended(2), size.height)
+            )
         )
-        let panelSize = Size(
+        let ideal = Size(
             width: min(max(measured.width, 6), size.width),
-            height: min(max(measured.height, 3), maxHeight)
+            height: min(max(measured.height, 2), size.height)
         )
+
+        enum Placement { case below, above, trailing, leading }
+        let candidates: [(Placement, Extended, Bool)] = [
+            (.below, spaceBelow, spaceBelow >= ideal.height),
+            (.above, spaceAbove, spaceAbove >= ideal.height),
+            (.trailing, spaceTrailing, spaceTrailing >= ideal.width),
+            (.leading, spaceLeading, spaceLeading >= ideal.width),
+        ]
+        let placement: Placement
+        if let bestFit = candidates.filter(\.2).max(by: { $0.1 < $1.1 }) {
+            placement = bestFit.0
+        } else if let best = candidates.max(by: { $0.1 < $1.1 }) {
+            placement = best.0
+        } else {
+            placement = .below
+        }
+
+        let panelSize: Size
+        switch placement {
+        case .below, .above:
+            panelSize = Size(
+                width: ideal.width,
+                height: min(ideal.height, max(Extended(2), placement == .below ? spaceBelow : spaceAbove))
+            )
+        case .trailing, .leading:
+            panelSize = Size(
+                width: min(ideal.width, max(Extended(6), placement == .trailing ? spaceTrailing : spaceLeading)),
+                height: ideal.height
+            )
+        }
         panelControl.layout(size: panelSize)
 
-        let anchorCenter = anchor.position.column + max(anchor.size.width, 1) / 2
-        var column = anchorCenter - panelSize.width / 2
+        let anchorCenterX = anchor.position.column + max(anchor.size.width, 1) / 2
+        let anchorCenterY = anchor.position.line + max(anchor.size.height, 1) / 2
+        var column: Extended
+        var line: Extended
+        switch placement {
+        case .below:
+            column = anchorCenterX - panelSize.width / 2
+            line = anchor.position.line + max(anchor.size.height, 1)
+        case .above:
+            column = anchorCenterX - panelSize.width / 2
+            line = anchor.position.line - panelSize.height
+        case .trailing:
+            column = anchor.position.column + max(anchor.size.width, 1)
+            line = anchorCenterY - panelSize.height / 2
+        case .leading:
+            column = anchor.position.column - panelSize.width
+            line = anchorCenterY - panelSize.height / 2
+        }
         if column < 0 { column = 0 }
         if column + panelSize.width > size.width {
             column = max(0, size.width - panelSize.width)
         }
-
-        let line: Extended
-        if placeBelow {
-            line = anchor.position.line + max(anchor.size.height, 1)
-        } else {
-            line = max(0, anchor.position.line - panelSize.height)
+        if line < 0 { line = 0 }
+        if line + panelSize.height > size.height {
+            line = max(0, size.height - panelSize.height)
         }
 
         panelControl.layer.frame.position = Position(column: column, line: line)
-        presenter?.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
+        entry.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
     }
 
     override func draw(into buffer: inout ScreenBuffer) {}
@@ -348,7 +561,8 @@ private final class PopoverFloatingControl: Control {
 
     override func handleKeyEvent(_ event: KeyEvent) {
         if event.keycode == VTKeyCode.escape || event.character == "\u{1b}" {
-            presenter?.dismiss()
+            guard presenter?.top?.id == entry.id else { return }
+            presenter?.dismiss(id: entry.id)
             return
         }
         super.handleKeyEvent(event)
@@ -359,36 +573,42 @@ private final class PopoverFloatingControl: Control {
 
 @MainActor
 private struct ModalFloatingLayer: View, PrimitiveView {
+    let entry: PresentationRecord
     let presenter: PopupPresenter
-    let panel: AnyView
 
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
-        node.addNode(at: 0, Node(view: panel.view))
-        let control = ModalFloatingControl(presenter: presenter)
-        control.panelControl = node.children[0].control(at: 0)
-        control.addSubview(control.panelControl, at: 0)
+        entry.layerNode = node
+        node.addNode(at: 0, Node(view: entry.makePanel().view))
+        let control = ModalFloatingControl(entry: entry, presenter: presenter)
+        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
+        entry.hostControl = control
         node.control = control
         stealFocus(control)
     }
 
     func updateNode(_ node: Node) {
+        entry.layerNode = node
         node.view = self
-        node.children[0].update(using: panel.view)
+        node.children[0].update(using: entry.makePanel().view)
         let control = node.control as! ModalFloatingControl
+        control.entry = entry
         control.presenter = presenter
-        control.panelControl = node.children[0].control(at: 0)
+        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
+        entry.hostControl = control
         control.layer.invalidate()
     }
 }
 
 @MainActor
 private final class ModalFloatingControl: Control {
+    var entry: PresentationRecord
     weak var presenter: PopupPresenter?
     var panelControl: Control!
 
-    init(presenter: PopupPresenter) {
+    init(entry: PresentationRecord, presenter: PopupPresenter) {
+        self.entry = entry
         self.presenter = presenter
     }
 
@@ -399,7 +619,6 @@ private final class ModalFloatingControl: Control {
         super.layout(size: size)
         guard let panelControl else { return }
 
-        // 按内容固有尺寸居中，不把提案宽度强加给面板
         let maxW = max(Extended(8), size.width - 4)
         let maxH = max(Extended(3), size.height - 2)
         let measured = panelControl.size(proposedSize: Size(width: maxW, height: maxH))
@@ -411,7 +630,7 @@ private final class ModalFloatingControl: Control {
         let column = max(0, (size.width - panelSize.width) / 2)
         let line = max(0, (size.height - panelSize.height) / 2)
         panelControl.layer.frame.position = Position(column: column, line: line)
-        presenter?.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
+        entry.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
     }
 
     override func draw(into buffer: inout ScreenBuffer) {
@@ -422,14 +641,12 @@ private final class ModalFloatingControl: Control {
                 guard var cell = buffer.cell(at: pos) else { continue }
                 if cell.char == "\0" { cell.char = " " }
                 cell.attributes.faint = true
-                // faint 与 bold 共用强度通道，关掉 bold 才能看出变淡
                 cell.attributes.bold = false
                 buffer.setCell(cell, at: pos)
             }
         }
     }
 
-    /// 遮罩吞掉所有命中；面板上的交给子控件。
     override func hitTest(position: Position) -> Control? {
         let local = position - layer.frame.position
         if let hit = panelControl?.hitTest(position: local) {
@@ -440,13 +657,16 @@ private final class ModalFloatingControl: Control {
 
     override func handleMouseEvent(_ event: MouseEvent) {
         if case .released(.left) = event.type {
-            presenter?.dismiss()
+            // 仅顶层遮罩响应外点关闭，避免嵌套时误关下层
+            guard presenter?.top?.id == entry.id else { return }
+            presenter?.dismiss(id: entry.id)
         }
     }
 
     override func handleKeyEvent(_ event: KeyEvent) {
         if event.keycode == VTKeyCode.escape || event.character == "\u{1b}" {
-            presenter?.dismiss()
+            guard presenter?.top?.id == entry.id else { return }
+            presenter?.dismiss(id: entry.id)
             return
         }
         super.handleKeyEvent(event)

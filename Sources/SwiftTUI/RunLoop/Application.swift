@@ -210,6 +210,8 @@ public class Application {
             needsLayout = true
             scheduleUpdate()
         }
+        // 已 present 的面板是快照树外的节点；状态变化时刷新栈内内容（嵌套 sheet 等）
+        window.popupPresenter?.noteContentInvalidated()
     }
 
     func scheduleUpdate() {
@@ -248,6 +250,9 @@ public class Application {
             node.update(using: node.view)
         }
         invalidatedNodes = []
+
+        // 刷新 present 面板（嵌套 sheet 等依赖 Binding 的内容）
+        window.popupPresenter?.refreshPresentedPanels()
 
         // Only do a full layout pass when data or size actually changed.
         // Pure scroll events do their own partial layout in the scroll handler.
