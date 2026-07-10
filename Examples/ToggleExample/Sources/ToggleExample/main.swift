@@ -26,7 +26,7 @@ struct ToggleExampleApp: View {
     private var header: some View {
         VStack(alignment: .leading, spacing: 1) {
             Text("Toggle").bold()
-            Text("Space / Enter / click to flip").foregroundColor(.brightBlack)
+            Text("Click to flip").foregroundColor(.brightBlack)
             Divider()
         }
     }

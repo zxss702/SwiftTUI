@@ -20,6 +20,7 @@ let menuItems: [MenuItem] = [
 @MainActor
 struct DetailView: View {
     let item: MenuItem
+    @State private var starred = false
 
     var body: some View {
         VStack(alignment: .leading) {
@@ -27,10 +28,21 @@ struct DetailView: View {
                 .foregroundColor(.cyan)
             Text("id: \(item.id)")
                 .foregroundColor(.yellow)
+            if starred {
+                Text("已加星标").foregroundColor(.yellow)
+            }
             NavigationLink("继续深入 >", value: "sub-\(item.id)")
         }
         .padding()
         .navigationTitle(item.title)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(starred ? "★" : "☆") { starred.toggle() }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button("编辑") {}
+            }
+        }
     }
 }
 
@@ -46,6 +58,15 @@ struct SubDetailView: View {
         }
         .padding()
         .navigationTitle("深入")
+        .toolbar {
+            ToolbarItem(placement: .principal) {
+                Text("自定义 Principal").bold()
+            }
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button("分享") {}
+                Button("更多") {}
+            }
+        }
     }
 }
 
@@ -59,6 +80,14 @@ struct AboutView: View {
         }
         .padding()
         .navigationTitle("关于")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("关闭") {}
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("完成") {}
+            }
+        }
     }
 }
 
