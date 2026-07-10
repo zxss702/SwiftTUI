@@ -41,5 +41,14 @@ import Foundation
                 return Size(width: 0, height: proposedSize.height)
             }
         }
+
+        /// size(.infinity) 故意返回 0，但弹性必须视为最大，否则 HStack 不会把剩余宽度分给 Spacer。
+        override func horizontalFlexibility(height: Extended) -> Extended {
+            orientation == .horizontal ? .infinity : 0
+        }
+
+        override func verticalFlexibility(width: Extended) -> Extended {
+            orientation == .vertical ? .infinity : 0
+        }
     }
 }

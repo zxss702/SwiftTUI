@@ -81,6 +81,7 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
         
         override func layout(size: Size) {
             super.layout(size: size)
+            // 提案满尺寸，子视图可自行扩展（如 Spacer）；若仍更小则按 alignment 居中
             children[0].layout(size: children[0].size(proposedSize: size))
             let oldFrame = children[0].layer.frame
             switch alignment.verticalAlignment {
