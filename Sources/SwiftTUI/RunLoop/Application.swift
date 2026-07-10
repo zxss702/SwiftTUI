@@ -18,12 +18,25 @@ public class Application {
     private var needsLayout = true
 
     public init<I: View>(rootView: I) {
-        node = Node(view: ZStack(alignment: .center) { rootView }.view)
+        let popupPresenter = PopupPresenter()
+        // 根必须是带 control 的 LayoutRoot（ZStack）；不要用 .environment 包一层，
+        // 否则 SetEnvironmentObject 没有 control，这里会 unwrap 崩溃。
+        node = Node(
+            view: ZStack(alignment: .center) {
+                rootView
+                PopupOverlayHost()
+            }.view
+        )
+        // PopupOverlayHost 在 build 时就会读 @Environment(PopupPresenter.self)，必须先注入
+        node.environment = { env in
+            env[PopupPresenter.self] = popupPresenter
+        }
         node.build()
 
         control = node.control!
 
         window = Window()
+        window.popupPresenter = popupPresenter
         window.addControl(control)
 
         window.firstResponder = control.firstSelectableElement
@@ -35,7 +48,7 @@ public class Application {
         node.application = self
         renderer.application = self
 
-        // 将 dismiss 注入到根节点环境，View 内通过 @Environment(\.dismiss) 获取
+        // dismiss 注入根环境
         let oldEnv = self.node.environment
         self.node.environment = { [weak self] env in
             oldEnv?(&env)
@@ -80,17 +93,17 @@ public class Application {
             }
             if !isRunning { break }
             
-            #if os(Windows)
-            // On Windows, WaitForSingleObject returns immediately for every event,
-            // so the event stream never suspends to let scheduleUpdate()'s Task run.
-            // For scroll events (which are high-frequency), call update() directly
-            // to render each frame without being starved by the input loop.
+            // Scroll events are high-frequency; present immediately so the viewport
+            // tracks the wheel. On Windows, WaitForSingleObject never suspends the
+            // stream, so scheduleUpdate()'s Task would otherwise be starved.
+            // On POSIX, a buffered burst of wheel events can also delay paint.
             if isScroll {
                 try? await update()
             } else {
+                #if os(Windows)
                 await Task.yield()
+                #endif
             }
-            #endif
             
             #if canImport(SwiftData)
             // macOS SwiftData relies on CFRunLoop to autosave and post notifications.
@@ -155,17 +168,27 @@ public class Application {
 
     private func handleMouseInput(_ event: MouseEvent) {
         let pos = event.position
-        
-        let target = control.hitTest(position: pos)
-        
 
+        let target = control.hitTest(position: pos)
+
+        // 外点关闭：先把事件交给下层，再 dismiss，这样「不影响点击」
+        let shouldDismissPopup: Bool = {
+            guard let presenter = window.popupPresenter, presenter.isPresented else { return false }
+            guard let frame = presenter.panelFrame else { return false }
+            switch event.type {
+            case .released(.left), .released(.right):
+                return !frame.contains(pos)
+            default:
+                return false
+            }
+        }()
 
         if target !== hoveredControl {
             hoveredControl?.isHovered = false
             target?.isHovered = true
             hoveredControl = target
         }
-        
+
         if let target = target {
             target.handleMouseEvent(event)
             if case .pressed(.left) = event.type, target.selectable {
@@ -173,6 +196,10 @@ public class Application {
                 window.firstResponder = target
                 window.firstResponder?.becomeFirstResponder()
             }
+        }
+
+        if shouldDismissPopup {
+            window.popupPresenter?.dismiss()
         }
     }
 

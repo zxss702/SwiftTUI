@@ -7,6 +7,9 @@ import Foundation
 
     var firstResponder: Control?
 
+    /// 应用级弹出层；由 `Application` 注入，供弹出菜单等 Control 回调使用。
+    weak var popupPresenter: PopupPresenter?
+
     func addControl(_ control: Control) {
         control.window = self
         self.controls.append(control)

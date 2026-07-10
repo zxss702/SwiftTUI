@@ -57,15 +57,24 @@ import Foundation
 
         override func handleEvent(_ char: Character) {
             if char == "\n" || char == " " {
-                action()
+                performAction()
             }
         }
 
         override func handleMouseEvent(_ event: MouseEvent) {
             if case .released(.left) = event.type {
-                action()
+                performAction()
             } else {
                 super.handleMouseEvent(event)
+            }
+        }
+
+        private func performAction() {
+            let wasPresented = window?.popupPresenter?.isPresented ?? false
+            action()
+            // 弹出层已打开时点击其中的按钮则关闭；本次 action 刚打开的不关
+            if wasPresented, window?.popupPresenter?.isPresented == true {
+                window?.popupPresenter?.dismiss()
             }
         }
 
