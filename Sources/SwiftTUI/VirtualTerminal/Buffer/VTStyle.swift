@@ -19,6 +19,11 @@ public struct VTAttributes: OptionSet, Sendable, Equatable {
 }
 
 extension VTAttributes {
+  /// Decreases text intensity (ANSI faint / SGR 2), approximating lower opacity.
+  public static var faint: VTAttributes {
+    VTAttributes(rawValue: 1 << 0)
+  }
+
   /// Makes text appear in bold or increased intensity.
   public static var bold: VTAttributes {
     VTAttributes(rawValue: 1 << 1)

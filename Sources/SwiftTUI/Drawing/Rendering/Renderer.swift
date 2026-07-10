@@ -63,6 +63,7 @@ import Foundation
         
         let attrs = cell.attributes
         var vtAttrs: VTAttributes = []
+        if attrs.faint { vtAttrs.insert(.faint) }
         if attrs.bold { vtAttrs.insert(.bold) }
         if attrs.italic { vtAttrs.insert(.italic) }
         if attrs.underline { vtAttrs.insert(.underline) }

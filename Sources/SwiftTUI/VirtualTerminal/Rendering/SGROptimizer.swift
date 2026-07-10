@@ -54,6 +54,7 @@ package struct SGRStateTracker: ~Copyable {
 
   private static func rendition(for attribute: VTAttributes, disabled: Bool = false) -> GraphicRendition {
     switch attribute {
+    case .faint: return disabled ? .Normal : .Faint
     case .bold: return disabled ? .Normal : .Bold
     case .italic: return disabled ? .ItalicOff : .Italic
     case .underline: return disabled ? .UnderlineOff : .Underline
@@ -156,8 +157,16 @@ package struct SGRStateTracker: ~Copyable {
     }
 
     // Attributes.
+    // Bold / Faint 共用 SGR 22（Normal）；先处理关闭，再按目标重开，避免互相清掉。
     if toggled.contains(.bold) {
       renditions.append(Self.rendition(for: .bold, disabled: removed.contains(.bold)))
+    }
+    if toggled.contains(.faint) {
+      renditions.append(Self.rendition(for: .faint, disabled: removed.contains(.faint)))
+    } else if removed.contains(.bold), target.attributes.contains(.faint) {
+      renditions.append(.Faint)
+    } else if removed.contains(.faint), target.attributes.contains(.bold) {
+      renditions.append(.Bold)
     }
     if toggled.contains(.italic) {
       renditions.append(Self.rendition(for: .italic, disabled: removed.contains(.italic)))
