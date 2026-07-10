@@ -1,73 +1,197 @@
 import Foundation
 
-@MainActor public struct TextEdit: View, PrimitiveView {
-    @Binding public var text: String
-    
+// MARK: - TextEditorStyle
+
+/// 对齐 SwiftUI.TextEditorStyle（macOS 现行：automatic / plain / roundedBorder）。
+@MainActor public protocol TextEditorStyle {}
+
+@MainActor public struct AutomaticTextEditorStyle: TextEditorStyle {
+    public init() {}
+}
+
+@MainActor public struct PlainTextEditorStyle: TextEditorStyle {
+    public init() {}
+}
+
+@MainActor public struct RoundedBorderTextEditorStyle: TextEditorStyle {
+    public init() {}
+}
+
+extension TextEditorStyle where Self == AutomaticTextEditorStyle {
+    public static var automatic: AutomaticTextEditorStyle { AutomaticTextEditorStyle() }
+}
+
+extension TextEditorStyle where Self == PlainTextEditorStyle {
+    public static var plain: PlainTextEditorStyle { PlainTextEditorStyle() }
+}
+
+extension TextEditorStyle where Self == RoundedBorderTextEditorStyle {
+    public static var roundedBorder: RoundedBorderTextEditorStyle { RoundedBorderTextEditorStyle() }
+}
+
+enum TextEditorStyleKind: Equatable {
+    case automatic
+    case plain
+    case roundedBorder
+}
+
+@MainActor
+protocol _TextEditorStyleResolvable {
+    var textEditorStyleKind: TextEditorStyleKind { get }
+}
+
+extension AutomaticTextEditorStyle: _TextEditorStyleResolvable {
+    var textEditorStyleKind: TextEditorStyleKind { .automatic }
+}
+
+extension PlainTextEditorStyle: _TextEditorStyleResolvable {
+    var textEditorStyleKind: TextEditorStyleKind { .plain }
+}
+
+extension RoundedBorderTextEditorStyle: _TextEditorStyleResolvable {
+    var textEditorStyleKind: TextEditorStyleKind { .roundedBorder }
+}
+
+private struct TextEditorStyleKindEnvironmentKey: EnvironmentKey {
+    static var defaultValue: TextEditorStyleKind { .automatic }
+}
+
+extension EnvironmentValues {
+    var textEditorStyleKind: TextEditorStyleKind {
+        get { self[TextEditorStyleKindEnvironmentKey.self] }
+        set { self[TextEditorStyleKindEnvironmentKey.self] = newValue }
+    }
+}
+
+public extension View {
+    func textEditorStyle<S: TextEditorStyle>(_ style: S) -> some View {
+        let kind = (style as? any _TextEditorStyleResolvable)?.textEditorStyleKind ?? .automatic
+        return environment(\.textEditorStyleKind, kind)
+    }
+}
+
+// MARK: - TextEditor
+
+/// 多行可滚动文本编辑，对齐 SwiftUI.TextEditor。
+@MainActor
+public struct TextEditor: View {
+    @Binding var text: String
+    @Environment(\.textEditorStyleKind) private var styleKind
+    @Environment(\.isEnabled) private var isEnabled
+
     public init(text: Binding<String>) {
         self._text = text
     }
+
+    public var body: some View {
+        let core = TextEditorCore(text: $text, isEnabled: isEnabled)
+        switch styleKind {
+        case .roundedBorder:
+            // macOS roundedBorder：圆角边框
+            core.border(style: .rounded)
+        case .automatic, .plain:
+            core
+        }
+    }
+}
+
+/// 旧名；请优先使用 `TextEditor`。
+public typealias TextEdit = TextEditor
+
+// MARK: - Core
+
+@MainActor
+private struct TextEditorCore: View, PrimitiveView {
+    @Binding var text: String
+    var isEnabled: Bool
 
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        node.control = TextEditControl(text: text) { newText in
-            self.text = newText
-        }
+        node.control = TextEditorControl(text: $text, isEnabled: isEnabled)
     }
 
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
-        let control = node.control as! TextEditControl
-        if control.text != text {
-            control.text = text
-        }
-        control.action = { newText in
-            self.text = newText
-        }
+        let control = node.control as! TextEditorControl
+        control.text = $text
+        control.isEnabledFlag = isEnabled
+        control.syncFromBinding()
+        control.layer.invalidate()
     }
 }
 
-private class TextEditControl: Control {
-    var text: String {
-        didSet {
-            if text != oldValue {
-                needsLayout = true
-                layer.invalidate()
-            }
-        }
-    }
-    var action: (String) -> Void
-    
-    init(text: String, action: @escaping (String) -> Void) {
-        self.text = text
-        self.action = action
-        self.cursorIndex = text.endIndex
-    }
-    
-    var cursorIndex: String.Index
-    var contentOffset: Extended = 0
-    
+@MainActor
+private final class TextEditorControl: Control {
+    var text: Binding<String>
+    var isEnabledFlag: Bool
+
+    private var cachedText: String
+    private var cursorIndex: String.Index
+    private var contentOffset: Extended = 0
     private var visualLines: [String] = []
     private var lineRanges: [Range<String.Index>] = []
-    private var needsLayout = true
-    
+    private var needsRebuild = true
+
+    init(text: Binding<String>, isEnabled: Bool) {
+        self.text = text
+        self.isEnabledFlag = isEnabled
+        self.cachedText = text.wrappedValue
+        self.cursorIndex = cachedText.endIndex
+    }
+
+    func syncFromBinding() {
+        let newText = text.wrappedValue
+        if newText != cachedText {
+            let distance = cachedText.distance(from: cachedText.startIndex, to: min(cursorIndex, cachedText.endIndex))
+            cachedText = newText
+            cursorIndex = cachedText.index(
+                cachedText.startIndex,
+                offsetBy: min(distance, cachedText.count),
+                limitedBy: cachedText.endIndex
+            ) ?? cachedText.endIndex
+            needsRebuild = true
+        }
+    }
+
+    override var selectable: Bool { isEnabledFlag }
+
+    override func size(proposedSize: Size) -> Size {
+        if proposedSize.width != .infinity, proposedSize.height != .infinity {
+            return Size(
+                width: max(proposedSize.width, 1),
+                height: max(proposedSize.height, 1)
+            )
+        }
+        let w = proposedSize.width == .infinity ? Extended(40) : max(proposedSize.width, 1)
+        let h = proposedSize.height == .infinity ? Extended(5) : max(proposedSize.height, 1)
+        return Size(width: w, height: h)
+    }
+
+    override func layout(size: Size) {
+        super.layout(size: size)
+        if needsRebuild {
+            buildVisualLines(width: size.width.intValue)
+        }
+    }
+
     private func buildVisualLines(width: Int) {
         visualLines.removeAll()
         lineRanges.removeAll()
-        
-        var currentIndex = text.startIndex
+
+        var currentIndex = cachedText.startIndex
         var currentVisualLine = ""
         var currentVisualLineStart = currentIndex
         var currentWidth = 0
-        
-        while currentIndex < text.endIndex {
-            let char = text[currentIndex]
+
+        while currentIndex < cachedText.endIndex {
+            let char = cachedText[currentIndex]
             let charWidth = char.width
-            
+
             if char == "\n" {
-                let nextIndex = text.index(after: currentIndex)
+                let nextIndex = cachedText.index(after: currentIndex)
                 visualLines.append(currentVisualLine)
                 lineRanges.append(currentVisualLineStart ..< nextIndex)
                 currentIndex = nextIndex
@@ -76,7 +200,7 @@ private class TextEditControl: Control {
                 currentWidth = 0
                 continue
             }
-            
+
             if width > 0 && currentWidth + charWidth > width {
                 visualLines.append(currentVisualLine)
                 lineRanges.append(currentVisualLineStart ..< currentIndex)
@@ -84,109 +208,97 @@ private class TextEditControl: Control {
                 currentVisualLineStart = currentIndex
                 currentWidth = 0
             }
-            
+
             currentVisualLine.append(char)
             currentWidth += charWidth
-            currentIndex = text.index(after: currentIndex)
+            currentIndex = cachedText.index(after: currentIndex)
         }
-        
-        // Append last line (even if empty, to allow cursor at the end)
+
         visualLines.append(currentVisualLine)
         lineRanges.append(currentVisualLineStart ..< currentIndex)
-        
-        needsLayout = false
+        needsRebuild = false
     }
-    
+
     private func getVisualPosition(for index: String.Index) -> (line: Int, col: Int) {
         for (i, range) in lineRanges.enumerated() {
             if range.contains(index) {
-                let prefix = text[range.lowerBound..<index]
-                // Note: prefix should not contain \n because if index was at \n, it's not in the prefix.
-                // Wait, if index IS the \n, the prefix string does not contain the \n.
-                // width of prefix is the col.
+                let prefix = cachedText[range.lowerBound..<index]
                 return (i, String(prefix).width)
             }
         }
-        // If at the very end
         if let last = lineRanges.last, index == last.upperBound {
             return (lineRanges.count - 1, visualLines.last?.width ?? 0)
         }
         return (0, 0)
     }
-    
+
     private func getIndex(forVisualPosition line: Int, col: Int) -> String.Index {
-        guard line >= 0 && line < visualLines.count else { return text.endIndex }
+        guard line >= 0 && line < visualLines.count else { return cachedText.endIndex }
         let range = lineRanges[line]
-        
+
         var currentWidth = 0
         var idx = range.lowerBound
         while idx < range.upperBound {
-            let char = text[idx]
+            let char = cachedText[idx]
             if char == "\n" { break }
             let charWidth = char.width
-            if currentWidth + charWidth > col {
-                break
-            }
+            if currentWidth + charWidth > col { break }
             currentWidth += charWidth
-            idx = text.index(after: idx)
+            idx = cachedText.index(after: idx)
         }
         return idx
     }
-    
-    override func layout(size: Size) {
-        super.layout(size: size)
-        if needsLayout {
-            buildVisualLines(width: size.width.intValue)
-        }
-    }
-    
+
     override func draw(into buffer: inout ScreenBuffer) {
-        let frame = layer.frame
-        let height = frame.size.height.intValue
-        
+        let height = layer.frame.size.height.intValue
+        let width = layer.frame.size.width.intValue
         let startLine = contentOffset.intValue
         let endLine = min(visualLines.count, startLine + height)
-        
+
         for i in startLine..<endLine {
             let lineStr = visualLines[i]
             let y = i - startLine
             var x = 0
             for char in lineStr {
                 let cw = char.width
-                buffer.setCell(Cell(char: char), at: Position(column: Extended(x), line: Extended(y)))
+                var cell = Cell(char: char)
+                if !isEnabledFlag { cell.attributes.faint = true }
+                buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
                 for w in 1..<cw {
                     buffer.setCell(Cell(char: "\u{0000}"), at: Position(column: Extended(x + w), line: Extended(y)))
                 }
                 x += cw
             }
-            while x < layer.frame.size.width.intValue {
+            while x < width {
                 buffer.setCell(Cell(char: " "), at: Position(column: Extended(x), line: Extended(y)))
                 x += 1
             }
         }
-        
-        for i in (endLine - startLine)..<layer.frame.size.height.intValue {
-            for x in 0..<layer.frame.size.width.intValue {
+
+        for i in (endLine - startLine)..<height {
+            for x in 0..<width {
                 buffer.setCell(Cell(char: " "), at: Position(column: Extended(x), line: Extended(i)))
             }
         }
     }
-    
+
     private func scrollToKeepCursorVisible() {
         let pos = getVisualPosition(for: cursorIndex)
         let frameHeight = layer.frame.size.height.intValue
-        
         if pos.line < contentOffset.intValue {
             contentOffset = Extended(pos.line)
         } else if pos.line >= contentOffset.intValue + frameHeight {
             contentOffset = Extended(pos.line - frameHeight + 1)
         }
     }
-    
-    override var selectable: Bool { true }
-    
+
+    private func commitText() {
+        text.wrappedValue = cachedText
+        layer.invalidate()
+    }
+
     override var cursorPosition: Position? {
-        guard isFirstResponder else { return nil }
+        guard isFirstResponder, isEnabledFlag else { return nil }
         let pos = getVisualPosition(for: cursorIndex)
         let visualY = pos.line - contentOffset.intValue
         if visualY >= 0 && visualY < layer.frame.size.height.intValue {
@@ -194,121 +306,104 @@ private class TextEditControl: Control {
         }
         return nil
     }
-    
+
     override func handleKeyEvent(_ event: KeyEvent) {
+        guard isEnabledFlag else { return }
         if event.character == nil {
             let keycode = event.keycode
             let pos = getVisualPosition(for: cursorIndex)
-            
+
             if keycode == VTKeyCode.left {
-                if cursorIndex > text.startIndex {
-                    cursorIndex = text.index(before: cursorIndex)
+                if cursorIndex > cachedText.startIndex {
+                    cursorIndex = cachedText.index(before: cursorIndex)
                 }
             } else if keycode == VTKeyCode.right {
-                if cursorIndex < text.endIndex {
-                    cursorIndex = text.index(after: cursorIndex)
+                if cursorIndex < cachedText.endIndex {
+                    cursorIndex = cachedText.index(after: cursorIndex)
                 }
             } else if keycode == VTKeyCode.up {
                 if pos.line > 0 {
                     cursorIndex = getIndex(forVisualPosition: pos.line - 1, col: pos.col)
                 } else {
-                    cursorIndex = text.startIndex
+                    cursorIndex = cachedText.startIndex
                 }
             } else if keycode == VTKeyCode.down {
                 if pos.line < visualLines.count - 1 {
                     cursorIndex = getIndex(forVisualPosition: pos.line + 1, col: pos.col)
                 } else {
-                    cursorIndex = text.endIndex
+                    cursorIndex = cachedText.endIndex
                 }
             }
             scrollToKeepCursorVisible()
             layer.invalidate()
             return
         }
-        
+
         guard let char = event.character else { return }
-        
-        if char == "\u{03}" { // Ctrl+C handled globally usually, but if reaches here
-            return
-        } else if char == "\u{7F}" { // Backspace
-            if cursorIndex > text.startIndex {
-                let prev = text.index(before: cursorIndex)
-                let distance = text.distance(from: text.startIndex, to: prev)
-                text.remove(at: prev)
-                cursorIndex = text.index(text.startIndex, offsetBy: distance)
-                needsLayout = true
+        if char == "\u{03}" { return }
+
+        if char == "\u{7F}" {
+            if cursorIndex > cachedText.startIndex {
+                let prev = cachedText.index(before: cursorIndex)
+                let distance = cachedText.distance(from: cachedText.startIndex, to: prev)
+                cachedText.remove(at: prev)
+                cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance)
+                needsRebuild = true
                 layout(size: layer.frame.size)
                 scrollToKeepCursorVisible()
-                action(text)
+                commitText()
             }
         } else if char == "\n" || char == "\r" {
-            let distance = text.distance(from: text.startIndex, to: cursorIndex)
-            text.insert("\n", at: cursorIndex)
-            cursorIndex = text.index(text.startIndex, offsetBy: distance + 1)
-            needsLayout = true
+            let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+            cachedText.insert("\n", at: cursorIndex)
+            cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
+            needsRebuild = true
             layout(size: layer.frame.size)
             scrollToKeepCursorVisible()
-            action(text)
+            commitText()
         } else {
-            let distance = text.distance(from: text.startIndex, to: cursorIndex)
-            text.insert(char, at: cursorIndex)
-            cursorIndex = text.index(text.startIndex, offsetBy: distance + 1)
-            needsLayout = true
+            let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+            cachedText.insert(char, at: cursorIndex)
+            cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
+            needsRebuild = true
             layout(size: layer.frame.size)
             scrollToKeepCursorVisible()
-            action(text)
+            commitText()
         }
     }
-    
+
     override func handleMouseEvent(_ event: MouseEvent) {
+        guard isEnabledFlag else { return }
         if case .scroll(_, let deltaY) = event.type {
             let maxOffset = max(0, visualLines.count - layer.frame.size.height.intValue)
             contentOffset += Extended(deltaY)
             if contentOffset.intValue < 0 { contentOffset = 0 }
             if contentOffset.intValue > maxOffset { contentOffset = Extended(maxOffset) }
-            
-            // Constrain cursor to visible lines!
+
             let pos = getVisualPosition(for: cursorIndex)
             let frameHeight = layer.frame.size.height.intValue
-            
             if pos.line < contentOffset.intValue {
                 cursorIndex = getIndex(forVisualPosition: contentOffset.intValue, col: pos.col)
             } else if pos.line >= contentOffset.intValue + frameHeight {
                 cursorIndex = getIndex(forVisualPosition: contentOffset.intValue + frameHeight - 1, col: pos.col)
             }
-            
             layer.invalidate()
         } else if case .pressed(.left) = event.type {
-            becomeFirstResponder()
-            
-            var globalLine = layer.frame.position.line.intValue
-            var globalColumn = layer.frame.position.column.intValue
-            var current = layer.parent
-            while let p = current {
-                globalLine += p.frame.position.line.intValue
-                globalColumn += p.frame.position.column.intValue
-                current = p.parent
-            }
-            
-            let localY = event.position.line.intValue - globalLine
-            let localX = event.position.column.intValue - globalColumn
-            
-            let visualY = localY + contentOffset.intValue
-            let visualX = localX
-            
-            cursorIndex = getIndex(forVisualPosition: visualY, col: visualX)
+            let local = event.position - absoluteFrame.position
+            let visualY = local.line.intValue + contentOffset.intValue
+            cursorIndex = getIndex(forVisualPosition: visualY, col: local.column.intValue)
             scrollToKeepCursorVisible()
             layer.invalidate()
         } else {
             super.handleMouseEvent(event)
         }
     }
-    
+
     override func becomeFirstResponder() {
         super.becomeFirstResponder()
         layer.invalidate()
     }
-    
+
     override func resignFirstResponder() {
         super.resignFirstResponder()
         layer.invalidate()
