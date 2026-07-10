@@ -1,0 +1,72 @@
+import Foundation
+
+public extension View {
+    func allowsHitTesting(_ enabled: Bool) -> some View {
+        AllowsHitTesting(content: self, enabled: enabled)
+    }
+}
+
+@MainActor
+private struct AllowsHitTesting<Content: View>: View, PrimitiveView, ModifierView {
+    let content: Content
+    let enabled: Bool
+
+    static var size: Int? { Content.size }
+
+    func buildNode(_ node: Node) {
+        node.controls = WeakSet<Control>()
+        node.addNode(at: 0, Node(view: content.view))
+    }
+
+    func updateNode(_ node: Node) {
+        node.view = self
+        node.children[0].update(using: content.view)
+        for control in node.controls?.values ?? [] {
+            (control as! AllowsHitTestingControl).enabled = enabled
+        }
+    }
+
+    func passControl(_ control: Control, node: Node) -> Control {
+        if let existing = control.parent as? AllowsHitTestingControl {
+            existing.enabled = enabled
+            return existing
+        }
+        let wrapper = AllowsHitTestingControl(enabled: enabled)
+        wrapper.addSubview(control, at: 0)
+        node.controls?.add(wrapper)
+        return wrapper
+    }
+
+    private final class AllowsHitTestingControl: Control {
+        var enabled: Bool
+
+        init(enabled: Bool) {
+            self.enabled = enabled
+        }
+
+        override func size(proposedSize: Size) -> Size {
+            children[0].size(proposedSize: proposedSize)
+        }
+
+        override func layout(size: Size) {
+            super.layout(size: size)
+            children[0].layout(size: size)
+        }
+
+        override func hitTest(position: Position) -> Control? {
+            guard enabled else { return nil }
+            let local = position - layer.frame.position
+            guard local.column >= 0, local.line >= 0,
+                  local.column < layer.frame.size.width,
+                  local.line < layer.frame.size.height else {
+                return nil
+            }
+            for child in children.reversed() {
+                if let hit = child.hitTest(position: local) {
+                    return hit
+                }
+            }
+            return nil
+        }
+    }
+}
