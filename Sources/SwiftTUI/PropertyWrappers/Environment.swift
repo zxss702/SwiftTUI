@@ -11,14 +11,23 @@ import Foundation
         get { values[ObjectIdentifier(key)] as? K.Value ?? K.defaultValue }
         set { values[ObjectIdentifier(key)] = newValue }
     }
+
+    public subscript<T>(type: T.Type) -> T? {
+        get { values[ObjectIdentifier(type)] as? T }
+        set { values[ObjectIdentifier(type)] = newValue }
+    }
 }
 
 @propertyWrapper
 @MainActor public struct Environment<T>: AnyEnvironment {
-    let keyPath: KeyPath<EnvironmentValues, T>
+    let keyPath: KeyPath<EnvironmentValues, T>?
 
     public init(_ keyPath: KeyPath<EnvironmentValues, T>) {
         self.keyPath = keyPath
+    }
+
+    public init(_ type: T.Type) {
+        self.keyPath = nil
     }
 
     var valueReference = EnvironmentReference()
@@ -27,10 +36,20 @@ import Foundation
         get {
             guard let node = valueReference.node else {
                 assertionFailure("Attempting to access @Environment variable before view is instantiated")
-                return EnvironmentValues()[keyPath: keyPath]
+                if let kp = keyPath {
+                    return EnvironmentValues()[keyPath: kp]
+                }
+                fatalError("Missing environment object of type \(T.self)")
             }
             let environmentValues = makeEnvironment(node: node, transform: { _ in })
-            return environmentValues[keyPath: self.keyPath]
+            if let kp = keyPath {
+                return environmentValues[keyPath: kp]
+            } else {
+                guard let object = environmentValues[T.self] else {
+                    fatalError("No environment object of type \(T.self) found in view hierarchy")
+                }
+                return object
+            }
         }
         set {}
     }
