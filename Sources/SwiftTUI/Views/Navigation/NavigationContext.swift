@@ -83,16 +83,16 @@ struct NavigationRootID: Hashable {
         titles[currentPageID] ?? ""
     }
 
-    /// 上级标题；无标题时为空，导航栏应显示 `<返回`
+    /// 上级标题；无标题时为空，导航栏应显示 `⟨返回`
     var backTitle: String {
         guard let parentPageID else { return "" }
         return titles[parentPageID] ?? ""
     }
 
-    /// 返回按钮文案：有上级 title 用 `< Title`，否则 `<返回`
+    /// 返回按钮文案：有上级 title 用 `⟨Title`，否则 `⟨返回`
     var backButtonLabel: String {
         let parent = backTitle
-        return parent.isEmpty ? "<返回" : "< \(parent)"
+        return parent.isEmpty ? "⟨返回" : "⟨\(parent)"
     }
 
     @ObservationIgnored

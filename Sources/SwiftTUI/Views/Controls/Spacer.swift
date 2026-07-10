@@ -29,8 +29,15 @@ import Foundation
         override func size(proposedSize: Size) -> Size {
             switch orientation {
             case .horizontal:
+                // 无界提案时不抢无限宽，避免父栈 infinity-infinity
+                if proposedSize.width == .infinity {
+                    return Size(width: 0, height: 0)
+                }
                 return Size(width: proposedSize.width, height: 0)
             case .vertical:
+                if proposedSize.height == .infinity {
+                    return Size(width: 0, height: 0)
+                }
                 return Size(width: 0, height: proposedSize.height)
             }
         }

@@ -80,7 +80,11 @@ import Foundation
                     remainingWidth -= spacing
                 }
                 remainingItems -= 1
-                remainingWidth -= childSize.width
+                if remainingWidth != .infinity {
+                    remainingWidth -= childSize.width
+                } else if childSize.width == .infinity {
+                    remainingWidth = 0
+                }
             }
             var column: Extended = 0
             for control in children {

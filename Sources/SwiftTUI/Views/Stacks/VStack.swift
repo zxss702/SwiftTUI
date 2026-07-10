@@ -86,7 +86,12 @@ import Foundation
                     remainingHeight -= spacing
                 }
                 remainingItems -= 1
-                remainingHeight -= childSize.height
+                if remainingHeight != .infinity {
+                    remainingHeight -= childSize.height
+                } else if childSize.height == .infinity {
+                    // 多个无界子视图：后续按 0 剩余处理，避免 ∞-∞
+                    remainingHeight = 0
+                }
             }
             var line: Extended = 0
             for control in children {
