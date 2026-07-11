@@ -32,13 +32,22 @@ import Foundation
             return initialValue
         }
         nonmutating set {
-            guard let node = valueReference.node,
-                  let label = valueReference.label
-            else {
-                assertionFailure("Attempting to modify @State variable before view is instantiated")
-                return
-            }
-            node.state[label] = newValue
+            setValue(newValue, invalidate: true)
+        }
+    }
+
+    /// Framework use: write state without scheduling a node invalidation.
+    /// Used by GeometryReader to publish size during layout and sync-update children
+    /// in the same pass without kicking off an update storm.
+    nonmutating func setValue(_ newValue: T, invalidate: Bool) {
+        guard let node = valueReference.node,
+              let label = valueReference.label
+        else {
+            assertionFailure("Attempting to modify @State variable before view is instantiated")
+            return
+        }
+        node.state[label] = newValue
+        if invalidate {
             node.root.application?.invalidateNode(node)
         }
     }

@@ -14,18 +14,30 @@ import Foundation
     func buildNode(_ node: Node) {
         setupStateProperties(node: node)
         node.addNode(at: 0, Node(view: VStack(content: content(geometry))))
-        node.control = GeometryReaderControl(geometry: _geometry)
-        node.control!.addSubview(node.children[0].control(at: 0), at: 0)
+        let control = GeometryReaderControl(geometry: _geometry)
+        control.node = node
+        control.rebuildChild = { [content] size in
+            VStack(content: content(size)).view
+        }
+        node.control = control
+        control.addSubview(node.children[0].control(at: 0), at: 0)
     }
 
     func updateNode(_ node: Node) {
         setupStateProperties(node: node)
         node.view = self
+        let control = node.control as! GeometryReaderControl
+        control.node = node
+        control.rebuildChild = { [content] size in
+            VStack(content: content(size)).view
+        }
         node.children[0].update(using: VStack(content: content(geometry)))
     }
 
     private class GeometryReaderControl: Control {
         let geometry: State<Size>
+        weak var node: Node?
+        var rebuildChild: ((Size) -> GenericView)?
 
         init(geometry: State<Size>) {
             self.geometry = geometry
@@ -37,9 +49,16 @@ import Foundation
 
         override func layout(size: Size) {
             super.layout(size: size)
-            self.children[0].layout(size: size)
+            // Publish size and sync-update the child tree *before* laying out children,
+            // so size-driven `if` branches switch in the same layout pass.
             if geometry.wrappedValue != size {
-                geometry.wrappedValue = size
+                geometry.setValue(size, invalidate: false)
+                if let node, let rebuildChild, !node.children.isEmpty {
+                    node.children[0].update(using: rebuildChild(size))
+                }
+            }
+            if !children.isEmpty {
+                children[0].layout(size: size)
             }
         }
     }

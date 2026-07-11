@@ -243,6 +243,7 @@ public class Application {
 
     private var isUpdating = false
     private var needsAnotherUpdate = false
+    private static let maxUpdateIterations = 8
 
     func update() async throws {
         guard !isUpdating else {
@@ -250,52 +251,60 @@ public class Application {
             return
         }
         isUpdating = true
-        
+        defer { isUpdating = false }
+
+        var iterations = 0
         repeat {
             needsAnotherUpdate = false
             updateScheduled = false
-
-
-        if let size = pendingResizeSize {
-            pendingResizeSize = nil
-            window.layer.frame.size = size
-            vtRenderer?.resize(to: size)
-            control.layer.invalidate()
-            needsLayout = true
-        }
-
-        for node in invalidatedNodes {
-            node.update(using: node.view)
-        }
-        invalidatedNodes = []
-
-        // 刷新 present 面板（嵌套 sheet 等依赖 Binding 的内容）
-        window.popupPresenter?.refreshPresentedPanels()
-
-        // Only do a full layout pass when data or size actually changed.
-        // Pure scroll events do their own partial layout in the scroll handler.
-        if needsLayout {
-            control.layout(size: window.layer.frame.size)
-            needsLayout = false
-        }
-        renderer.update()
-        if let vtRenderer = vtRenderer {
-            isPresenting = true
-            await vtRenderer.present()
-            isPresenting = false
-            
-            if let responder = window.firstResponder, let cursor = responder.cursorPosition {
-                let absPos = responder.absoluteFrame.position
-                let cursorX = absPos.column.intValue + cursor.column.intValue
-                let cursorY = absPos.line.intValue + cursor.line.intValue
-                await vtRenderer.terminal.write("\u{1B}[\(cursorY + 1);\(cursorX + 1)H\u{1B}[?25h")
-            } else {
-                await vtRenderer.terminal.write("\u{1B}[?25l")
+            iterations += 1
+            if iterations > Self.maxUpdateIterations {
+                #if DEBUG
+                print("SwiftTUI: update loop exceeded \(Self.maxUpdateIterations) iterations; breaking to avoid freeze")
+                #endif
+                break
             }
+
+            if let size = pendingResizeSize {
+                pendingResizeSize = nil
+                window.layer.frame.size = size
+                vtRenderer?.resize(to: size)
+                control.layer.invalidate()
+                needsLayout = true
+            }
+
+            for node in invalidatedNodes {
+                node.update(using: node.view)
+            }
+            invalidatedNodes = []
+
+            // 刷新 present 面板（嵌套 sheet 等依赖 Binding 的内容）
+            window.popupPresenter?.refreshPresentedPanels()
+
+            // Layout may request another pass (e.g. structural change during GeometryReader sync).
+            var layoutPasses = 0
+            while needsLayout, layoutPasses < 4 {
+                needsLayout = false
+                control.layout(size: window.layer.frame.size)
+                layoutPasses += 1
+            }
+
+            renderer.update()
+            if let vtRenderer = vtRenderer {
+                isPresenting = true
+                await vtRenderer.present()
+                isPresenting = false
+
+                if let responder = window.firstResponder, let cursor = responder.cursorPosition {
+                    let absPos = responder.absoluteFrame.position
+                    let cursorX = absPos.column.intValue + cursor.column.intValue
+                    let cursorY = absPos.line.intValue + cursor.line.intValue
+                    await vtRenderer.terminal.write("\u{1B}[\(cursorY + 1);\(cursorX + 1)H\u{1B}[?25h")
+                } else {
+                    await vtRenderer.terminal.write("\u{1B}[?25l")
+                }
             }
         } while needsAnotherUpdate
-        
-        isUpdating = false
     }
 
     private func handleWindowSizeChange(size: Size) {
