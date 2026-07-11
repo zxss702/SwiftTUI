@@ -250,61 +250,68 @@ public final class VTRenderer: @unchecked Sendable {
   ///
   /// The method uses terminal synchronization to ensure atomic updates
   /// and maintains minimal cursor movement for optimal performance.
-  private borrowing func paint(_ damages: [DamageSpan]) async {
-    // If there is no damage, we can skip the reconciliation.
-    guard !damages.isEmpty else { return }
-
+  private borrowing func paint(_ damages: [DamageSpan], cursor: VTPosition?) async {
     await withBufferedOutput(terminal: terminal) { stream in
       stream <<< .SetMode([.DEC(.SynchronizedUpdate)])
       defer { stream <<< .ResetMode([.DEC(.SynchronizedUpdate)]) }
 
-      var tracker = SGRStateTracker()
-      var current = VTPosition(row: .max, column: .max)
+      // Hide while rewriting cells so the HW cursor does not race through damage.
+      stream <<< .ResetMode([.DEC(.TextCursorEnableMode)])
 
-      for span in damages {
-        var startOffset = span.range.lowerBound
-        while startOffset < span.range.upperBound {
-            let position = back.position(at: startOffset)
-            let remainingInLine = back.size.widthInt - position.column + 1
-            let endOffset = min(span.range.upperBound, startOffset + remainingInLine)
-            
-            if position != current || position.column == 1 {
-                if position.column == 1 {
-                    stream <<< .CursorPosition(position.row, position.column)
-                } else {
-                    for motion in back.reposition(from: current, to: position) {
-                        stream <<< motion
-                    }
-                }
-            }
-            
-            let transition = tracker.transition(to: span.style)
-            if !transition.isEmpty {
-                stream <<< .SelectGraphicRendition(transition)
-            }
-            
-            for segment in back.segment(startOffset ..< endOffset) {
-                switch segment {
-                case .run(let character, let count):
-                    stream <<< String(repeating: character, count: count)
-                case .literal(let string):
-                    stream <<< string
-                }
-            }
-            
-            startOffset = endOffset
-            while startOffset < back.buffer.count && back.buffer[startOffset].character == "\u{0000}" {
-                startOffset += 1
-            }
-            
-            if startOffset < back.buffer.count {
-                current = back.position(at: startOffset)
-            }
+      if !damages.isEmpty {
+        var tracker = SGRStateTracker()
+        var current = VTPosition(row: .max, column: .max)
+
+        for span in damages {
+          var startOffset = span.range.lowerBound
+          while startOffset < span.range.upperBound {
+              let position = back.position(at: startOffset)
+              let remainingInLine = back.size.widthInt - position.column + 1
+              let endOffset = min(span.range.upperBound, startOffset + remainingInLine)
+
+              if position != current || position.column == 1 {
+                  if position.column == 1 {
+                      stream <<< .CursorPosition(position.row, position.column)
+                  } else {
+                      for motion in back.reposition(from: current, to: position) {
+                          stream <<< motion
+                      }
+                  }
+              }
+
+              let transition = tracker.transition(to: span.style)
+              if !transition.isEmpty {
+                  stream <<< .SelectGraphicRendition(transition)
+              }
+
+              for segment in back.segment(startOffset ..< endOffset) {
+                  switch segment {
+                  case .run(let character, let count):
+                      stream <<< String(repeating: character, count: count)
+                  case .literal(let string):
+                      stream <<< string
+                  }
+              }
+
+              startOffset = endOffset
+              while startOffset < back.buffer.count && back.buffer[startOffset].character == "\u{0000}" {
+                  startOffset += 1
+              }
+
+              if startOffset < back.buffer.count {
+                  current = back.position(at: startOffset)
+              }
+          }
+          current = VTPosition(row: .max, column: .max)
         }
-        current = VTPosition(row: .max, column: .max)
+
+        stream <<< .SelectGraphicRendition([.Reset])
       }
 
-      stream <<< .SelectGraphicRendition([.Reset])
+      if let cursor {
+        stream <<< .CursorPosition(cursor.row, cursor.column)
+        stream <<< .SetMode([.DEC(.TextCursorEnableMode)])
+      }
     }
   }
 
@@ -336,13 +343,15 @@ public final class VTRenderer: @unchecked Sendable {
   /// - Cursor movement is optimized
   /// - Style changes are minimized
   /// - Output is synchronized to prevent flicker
-  public func present() async {
+  /// - Parameter cursor: Optional 1-based soft caret to place inside the same
+  ///   Synchronized Update as damage paint. Pass `nil` to hide the cursor.
+  public func present(cursor: VTPosition? = nil) async {
     if needsClear {
       await terminal.write("\u{1B}[2J\u{1B}[H")
       needsClear = false
     }
     let spans = damages(from: front, to: back)
-    await paint(spans)
+    await paint(spans, cursor: cursor)
     swap(&front, &back)
     // Sync only changed cells into the new back buffer (was old front).
     back.copy(from: front, damages: spans)

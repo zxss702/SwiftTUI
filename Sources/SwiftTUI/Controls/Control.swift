@@ -45,17 +45,22 @@ import Foundation
         }
         if let window = root.window, window.firstResponder == nil {
             if let responder = view.firstSelectableElement {
-                window.firstResponder = responder
-                responder.becomeFirstResponder()
+                window.setFirstResponder(responder)
             }
         }
     }
 
     func removeSubview(at index: Int) {
         if children[index].isFirstResponder || root.window?.firstResponder?.isDescendant(of: children[index]) == true {
-            root.window?.firstResponder?.resignFirstResponder()
-            root.window?.firstResponder = root.firstSelectableElement
-            root.window?.firstResponder?.becomeFirstResponder()
+            let fallback = root.firstSelectableElement
+            // Prefer a sibling/ancestor selectable that is not inside the removed subtree.
+            let next: Control?
+            if let fallback, !fallback.isDescendant(of: children[index]), fallback !== children[index] {
+                next = fallback
+            } else {
+                next = nil
+            }
+            root.window?.setFirstResponder(next)
         }
         children[index].willRemoveFromParent()
         assignWindow(nil, to: children[index])
@@ -182,12 +187,21 @@ import Foundation
 
     var isFirstResponder: Bool { root.window?.firstResponder === self }
 
+    /// Set by `.focusable(false)` to opt out of keyboard/mouse focus.
+    var focusableFlag: Bool = true
+
+    /// Registration installed by `.focused` / `.focused(_:equals:)`.
+    var focusRegistration: FocusRegistration?
+
     // MARK: - Selection
 
     var selectable: Bool { false }
 
+    /// Whether this control may become `Window.firstResponder`.
+    var canReceiveFocus: Bool { selectable && focusableFlag }
+
     var firstSelectableElement: Control? {
-        if selectable { return self }
+        if canReceiveFocus { return self }
         for control in children {
             if let element = control.firstSelectableElement { return element }
         }

@@ -679,9 +679,8 @@ private final class ModalFloatingControl: Control {
 private func stealFocus(_ control: Control) {
     DispatchQueue.main.async {
         guard let window = control.window else { return }
-        window.firstResponder?.resignFirstResponder()
-        window.firstResponder = control
-        control.becomeFirstResponder()
+        let target = control.canReceiveFocus ? control : (control.firstSelectableElement ?? control)
+        window.setFirstResponder(target)
     }
 }
 

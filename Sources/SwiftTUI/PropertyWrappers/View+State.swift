@@ -10,6 +10,10 @@ extension View {
                 stateValue.valueReference.node = node
                 stateValue.valueReference.label = label
             }
+            if let focusValue = value as? AnyFocusState {
+                focusValue.valueReference.node = node
+                focusValue.valueReference.label = label
+            }
         }
     }
 }

@@ -39,8 +39,7 @@ public class Application {
         window.popupPresenter = popupPresenter
         window.addControl(control)
 
-        window.firstResponder = control.firstSelectableElement
-        window.firstResponder?.becomeFirstResponder()
+        window.setFirstResponder(control.firstSelectableElement)
         
         renderer = Renderer(layer: window.layer)
         window.layer.renderer = renderer
@@ -200,10 +199,8 @@ public class Application {
 
         if let target = target {
             target.handleMouseEvent(event)
-            if case .pressed(.left) = event.type, target.selectable {
-                window.firstResponder?.resignFirstResponder()
-                window.firstResponder = target
-                window.firstResponder?.becomeFirstResponder()
+            if case .pressed(.left) = event.type, target.canReceiveFocus {
+                window.setFirstResponder(target)
             }
         }
 
@@ -289,18 +286,22 @@ public class Application {
 
             renderer.update()
             if let vtRenderer = vtRenderer {
-                isPresenting = true
-                await vtRenderer.present()
-                isPresenting = false
-
+                // Soft caret must share the paint's Synchronized Update; a
+                // separate CUP after present leaves the HW cursor on the last
+                // damaged cell (often bottom-right) for one flush.
+                let softCursor: VTPosition?
                 if let responder = window.firstResponder, let cursor = responder.cursorPosition {
                     let absPos = responder.absoluteFrame.position
-                    let cursorX = absPos.column.intValue + cursor.column.intValue
-                    let cursorY = absPos.line.intValue + cursor.line.intValue
-                    await vtRenderer.terminal.write("\u{1B}[\(cursorY + 1);\(cursorX + 1)H\u{1B}[?25h")
+                    softCursor = VTPosition(
+                        row: absPos.line.intValue + cursor.line.intValue + 1,
+                        column: absPos.column.intValue + cursor.column.intValue + 1
+                    )
                 } else {
-                    await vtRenderer.terminal.write("\u{1B}[?25l")
+                    softCursor = nil
                 }
+                isPresenting = true
+                await vtRenderer.present(cursor: softCursor)
+                isPresenting = false
             }
         } while needsAnotherUpdate
     }

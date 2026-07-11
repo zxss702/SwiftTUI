@@ -5,7 +5,7 @@ import Foundation
 
     private(set) var controls: [Control] = []
 
-    var firstResponder: Control?
+    private(set) var firstResponder: Control?
 
     /// 拖动手势等：按下后捕获 move/release，避免 hitTest 随光标漂移。
     weak var mouseCapture: Control?
@@ -17,6 +17,26 @@ import Foundation
         control.window = self
         self.controls.append(control)
         layer.addLayer(control.layer, at: 0)
+    }
+
+    /// Single entry for focus changes so `@FocusState` / `.focused` stay in sync.
+    func setFirstResponder(_ control: Control?) {
+        let next: Control?
+        if let control, control.canReceiveFocus {
+            next = control
+        } else {
+            next = nil
+        }
+        guard firstResponder !== next else { return }
+
+        let previous = firstResponder
+        previous?.resignFirstResponder()
+        previous?.focusRegistration?.notifyResignFirstResponder()
+
+        firstResponder = next
+
+        next?.becomeFirstResponder()
+        next?.focusRegistration?.notifyBecomeFirstResponder()
     }
 
     private func makeLayer() -> Layer {
