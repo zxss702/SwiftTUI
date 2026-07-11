@@ -23,9 +23,11 @@ import Foundation
             return
         }
         
-        // Notify VTRenderer to invalidate its front buffer for this rect,
-        // ensuring DeltaCompression accurately redraws externally corrupted areas (like IME input)
-        vtRenderer?.invalidate(rect: rect)
+        // Only redraw the dirty rect into the back buffer. Delta compression
+        // compares front vs back; do not poison the front buffer on every paint
+        // (that forced full-line terminal output even for single-cell edits).
+        // Use `vtRenderer.invalidate(rect:)` explicitly when external corruption
+        // (e.g. IME) needs a forced redraw.
         
         var buffer = ScreenBuffer(rect: rect)
         layer.draw(into: &buffer)

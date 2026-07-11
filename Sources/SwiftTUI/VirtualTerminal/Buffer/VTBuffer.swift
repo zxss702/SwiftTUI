@@ -32,6 +32,29 @@ public struct VTBuffer: ~Copyable, Sendable {
     guard self.size == other.size else { return }
     self.buffer.replaceSubrange(0..<self.buffer.count, with: other.buffer)
   }
+
+  /// Copies only the damaged ranges from `other` into this buffer.
+  /// Used after present() swap so the next back buffer matches the displayed
+  /// front without a full-screen copy on every frame.
+  package mutating func copy(from other: borrowing VTBuffer, damages: [DamageSpan]) {
+    guard self.size == other.size else {
+      copy(from: other)
+      return
+    }
+    if damages.isEmpty { return }
+    // Near-full damage is cheaper as one contiguous replace.
+    let cellCount = buffer.count
+    let damagedCells = damages.reduce(0) { $0 + $1.range.count }
+    if damagedCells * 2 >= cellCount {
+      copy(from: other)
+      return
+    }
+    for span in damages {
+      let range = span.range
+      guard !range.isEmpty, range.lowerBound >= 0, range.upperBound <= buffer.count else { continue }
+      buffer.replaceSubrange(range, with: other.buffer[range])
+    }
+  }
 }
 
 extension VTBuffer {

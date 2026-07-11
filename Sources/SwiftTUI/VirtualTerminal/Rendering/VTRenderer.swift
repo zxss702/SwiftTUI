@@ -341,9 +341,11 @@ public final class VTRenderer: @unchecked Sendable {
       await terminal.write("\u{1B}[2J\u{1B}[H")
       needsClear = false
     }
-    await paint(damages(from: front, to: back))
+    let spans = damages(from: front, to: back)
+    await paint(spans)
     swap(&front, &back)
-    back.copy(from: front)
+    // Sync only changed cells into the new back buffer (was old front).
+    back.copy(from: front, damages: spans)
   }
 
   /// Runs an automatic rendering loop with frame rate control and profiling.
