@@ -118,8 +118,11 @@ private struct TextEditorCore: View, PrimitiveView {
         let control = node.control as! TextEditorControl
         control.text = $text
         control.isEnabledFlag = isEnabled
-        control.syncFromBinding()
-        control.layer.invalidate()
+        // External Binding changes only: local edits already rebuilt + invalidated.
+        if control.syncFromBinding() {
+            control.ensureVisualLines()
+            control.layer.invalidate()
+        }
     }
 }
 
@@ -134,6 +137,7 @@ private final class TextEditorControl: Control {
     private var visualLines: [String] = []
     private var lineRanges: [Range<String.Index>] = []
     private var needsRebuild = true
+    private var lastBuiltWidth: Int = -1
 
     init(text: Binding<String>, isEnabled: Bool) {
         self.text = text
@@ -142,18 +146,20 @@ private final class TextEditorControl: Control {
         self.cursorIndex = cachedText.endIndex
     }
 
-    func syncFromBinding() {
+    /// Returns true when cached text was replaced from an external Binding write.
+    @discardableResult
+    func syncFromBinding() -> Bool {
         let newText = text.wrappedValue
-        if newText != cachedText {
-            let distance = cachedText.distance(from: cachedText.startIndex, to: min(cursorIndex, cachedText.endIndex))
-            cachedText = newText
-            cursorIndex = cachedText.index(
-                cachedText.startIndex,
-                offsetBy: min(distance, cachedText.count),
-                limitedBy: cachedText.endIndex
-            ) ?? cachedText.endIndex
-            needsRebuild = true
-        }
+        guard newText != cachedText else { return false }
+        let distance = cachedText.distance(from: cachedText.startIndex, to: min(cursorIndex, cachedText.endIndex))
+        cachedText = newText
+        cursorIndex = cachedText.index(
+            cachedText.startIndex,
+            offsetBy: min(distance, cachedText.count),
+            limitedBy: cachedText.endIndex
+        ) ?? cachedText.endIndex
+        needsRebuild = true
+        return true
     }
 
     override var selectable: Bool { isEnabledFlag }
@@ -172,14 +178,19 @@ private final class TextEditorControl: Control {
 
     override func layout(size: Size) {
         super.layout(size: size)
-        if needsRebuild {
-            buildVisualLines(width: size.width.intValue)
+        ensureVisualLines(width: size.width.intValue)
+    }
+
+    func ensureVisualLines(width: Int? = nil) {
+        let width = width ?? max(layer.frame.size.width.intValue, 1)
+        if needsRebuild || width != lastBuiltWidth {
+            buildVisualLines(width: width)
         }
     }
 
     private func buildVisualLines(width: Int) {
-        visualLines.removeAll()
-        lineRanges.removeAll()
+        visualLines.removeAll(keepingCapacity: true)
+        lineRanges.removeAll(keepingCapacity: true)
 
         var currentIndex = cachedText.startIndex
         var currentVisualLine = ""
@@ -217,13 +228,19 @@ private final class TextEditorControl: Control {
         visualLines.append(currentVisualLine)
         lineRanges.append(currentVisualLineStart ..< currentIndex)
         needsRebuild = false
+        lastBuiltWidth = width
     }
 
     private func getVisualPosition(for index: String.Index) -> (line: Int, col: Int) {
         for (i, range) in lineRanges.enumerated() {
             if range.contains(index) {
-                let prefix = cachedText[range.lowerBound..<index]
-                return (i, String(prefix).width)
+                var col = 0
+                var idx = range.lowerBound
+                while idx < index {
+                    col += cachedText[idx].width
+                    idx = cachedText.index(after: idx)
+                }
+                return (i, col)
             }
         }
         if let last = lineRanges.last, index == last.upperBound {
@@ -250,6 +267,7 @@ private final class TextEditorControl: Control {
     }
 
     override func draw(into buffer: inout ScreenBuffer) {
+        ensureVisualLines()
         let height = layer.frame.size.height.intValue
         let width = layer.frame.size.width.intValue
         let startLine = contentOffset.intValue
@@ -293,12 +311,23 @@ private final class TextEditorControl: Control {
     }
 
     private func commitText() {
+        // Local visual lines already match cachedText; Binding write refreshes ancestors
+        // without forcing a second rebuild in syncFromBinding.
         text.wrappedValue = cachedText
         layer.invalidate()
     }
 
+    private func applyTextMutation(_ mutate: () -> Void) {
+        mutate()
+        needsRebuild = true
+        ensureVisualLines()
+        scrollToKeepCursorVisible()
+        commitText()
+    }
+
     override var cursorPosition: Position? {
         guard isFirstResponder, isEnabledFlag else { return nil }
+        ensureVisualLines()
         let pos = getVisualPosition(for: cursorIndex)
         let visualY = pos.line - contentOffset.intValue
         if visualY >= 0 && visualY < layer.frame.size.height.intValue {
@@ -309,6 +338,7 @@ private final class TextEditorControl: Control {
 
     override func handleKeyEvent(_ event: KeyEvent) {
         guard isEnabledFlag else { return }
+        ensureVisualLines()
         if event.character == nil {
             let keycode = event.keycode
             let pos = getVisualPosition(for: cursorIndex)
@@ -343,37 +373,31 @@ private final class TextEditorControl: Control {
         if char == "\u{03}" { return }
 
         if char == "\u{7F}" {
-            if cursorIndex > cachedText.startIndex {
+            guard cursorIndex > cachedText.startIndex else { return }
+            applyTextMutation {
                 let prev = cachedText.index(before: cursorIndex)
                 let distance = cachedText.distance(from: cachedText.startIndex, to: prev)
                 cachedText.remove(at: prev)
                 cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance)
-                needsRebuild = true
-                layout(size: layer.frame.size)
-                scrollToKeepCursorVisible()
-                commitText()
             }
         } else if char == "\n" || char == "\r" {
-            let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
-            cachedText.insert("\n", at: cursorIndex)
-            cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
-            needsRebuild = true
-            layout(size: layer.frame.size)
-            scrollToKeepCursorVisible()
-            commitText()
+            applyTextMutation {
+                let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+                cachedText.insert("\n", at: cursorIndex)
+                cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
+            }
         } else {
-            let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
-            cachedText.insert(char, at: cursorIndex)
-            cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
-            needsRebuild = true
-            layout(size: layer.frame.size)
-            scrollToKeepCursorVisible()
-            commitText()
+            applyTextMutation {
+                let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+                cachedText.insert(char, at: cursorIndex)
+                cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
+            }
         }
     }
 
     override func handleMouseEvent(_ event: MouseEvent) {
         guard isEnabledFlag else { return }
+        ensureVisualLines()
         if case .scroll(_, let deltaY) = event.type {
             let maxOffset = max(0, visualLines.count - layer.frame.size.height.intValue)
             contentOffset += Extended(deltaY)
