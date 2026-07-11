@@ -33,9 +33,10 @@ import Foundation
         let control = node.control as! LazyVStackControl
         control.alignment = alignment
         control.spacing = spacing ?? 0
-        control.totalChildrenSize = node.children[0].size
-        control.clearCache() // Clear cache so views are recreated correctly on update
-        control.updateVisibleRegion(offset: control.lastOffset, height: control.lastHeight)
+        // Reuse already-mounted controls; only drop out-of-range entries and refresh
+        // the visible window. Clearing the cache without removeSubview used to
+        // duplicate children on every parent @State refresh.
+        control.reloadContent(totalChildrenSize: node.children[0].size)
     }
 
     func insertControl(at index: Int, node: Node) {
@@ -60,9 +61,39 @@ import Foundation
         private var loadedControls: [Int: Control] = [:]
 
         func clearCache() {
-            loadedControls.removeAll()
+            unloadAllLoadedControls()
             lastStartIndex = nil
             lastEndIndex = nil
+        }
+
+        /// Update data source size and refresh the visible window without
+        /// duplicating already-mounted subviews.
+        func reloadContent(totalChildrenSize: Int) {
+            self.totalChildrenSize = totalChildrenSize
+            var toRemove: [Int] = []
+            for (i, _) in loadedControls where i >= totalChildrenSize {
+                toRemove.append(i)
+            }
+            for i in toRemove {
+                unloadControl(at: i)
+            }
+            lastStartIndex = nil
+            lastEndIndex = nil
+            updateVisibleRegion(offset: lastOffset, height: lastHeight)
+        }
+
+        private func unloadAllLoadedControls() {
+            for i in Array(loadedControls.keys) {
+                unloadControl(at: i)
+            }
+        }
+
+        private func unloadControl(at index: Int) {
+            if let ctrl = loadedControls[index],
+               let idx = children.firstIndex(where: { $0 === ctrl }) {
+                removeSubview(at: idx)
+            }
+            loadedControls.removeValue(forKey: index)
         }
 
         init(alignment: HorizontalAlignment, spacing: Extended) {
@@ -100,19 +131,28 @@ import Foundation
                 }
             }
             for i in toRemove {
-                if let ctrl = loadedControls[i],
-                   let idx = children.firstIndex(where: { $0 === ctrl }) {
-                    removeSubview(at: idx)
-                }
-                loadedControls.removeValue(forKey: i)
+                unloadControl(at: i)
             }
 
             // Only add items that are newly visible
             for i in startIndex...endIndex {
                 if loadedControls[i] == nil {
                     let control = contentNode.control(at: i)
-                    loadedControls[i] = control
-                    addSubview(control, at: children.count)
+                    // Guard against an already-parented control (e.g. after a bad cache clear).
+                    if control.parent == nil {
+                        loadedControls[i] = control
+                        addSubview(control, at: children.count)
+                    } else if control.parent === self {
+                        loadedControls[i] = control
+                    } else {
+                        // Detach from unexpected parent, then mount here.
+                        if let oldParent = control.parent,
+                           let idx = oldParent.children.firstIndex(where: { $0 === control }) {
+                            oldParent.removeSubview(at: idx)
+                        }
+                        loadedControls[i] = control
+                        addSubview(control, at: children.count)
+                    }
                 }
             }
             

@@ -38,9 +38,7 @@ import Foundation
         control.alignment = alignment
         control.spacing = spacing
         control.estimatedRowHeight = estimatedRowHeight
-        control.totalChildrenSize = node.children[0].size
-        control.clearCache()
-        control.updateVisibleRegion(offset: control.lastOffset, height: control.lastHeight)
+        control.reloadContent(totalChildrenSize: node.children[0].size)
     }
 
     func insertControl(at index: Int, node: Node) {}
@@ -65,10 +63,38 @@ import Foundation
         private var rowCount: Int = 0
 
         func clearCache() {
-            loadedControls.removeAll()
+            unloadAllLoadedControls()
             lastStartIndex = nil
             lastEndIndex = nil
             lastCalculatedWidth = -1
+        }
+
+        func reloadContent(totalChildrenSize: Int) {
+            self.totalChildrenSize = totalChildrenSize
+            var toRemove: [Int] = []
+            for (i, _) in loadedControls where i >= totalChildrenSize {
+                toRemove.append(i)
+            }
+            for i in toRemove {
+                unloadControl(at: i)
+            }
+            lastStartIndex = nil
+            lastEndIndex = nil
+            updateVisibleRegion(offset: lastOffset, height: lastHeight)
+        }
+
+        private func unloadAllLoadedControls() {
+            for i in Array(loadedControls.keys) {
+                unloadControl(at: i)
+            }
+        }
+
+        private func unloadControl(at index: Int) {
+            if let ctrl = loadedControls[index],
+               let idx = children.firstIndex(where: { $0 === ctrl }) {
+                removeSubview(at: idx)
+            }
+            loadedControls.removeValue(forKey: index)
         }
 
         init(columns: [GridItem], alignment: HorizontalAlignment, spacing: Extended?, estimatedRowHeight: Extended) {
@@ -113,19 +139,26 @@ import Foundation
                 }
             }
             for i in toRemove {
-                if let ctrl = loadedControls[i],
-                   let idx = children.firstIndex(where: { $0 === ctrl }) {
-                    removeSubview(at: idx)
-                }
-                loadedControls.removeValue(forKey: i)
+                unloadControl(at: i)
             }
 
             // ── Only add items that are newly visible ──
             for i in startIndex...endIndex {
                 if loadedControls[i] == nil {
                     let control = contentNode.control(at: i)
-                    loadedControls[i] = control
-                    addSubview(control, at: children.count)
+                    if control.parent == nil {
+                        loadedControls[i] = control
+                        addSubview(control, at: children.count)
+                    } else if control.parent === self {
+                        loadedControls[i] = control
+                    } else {
+                        if let oldParent = control.parent,
+                           let idx = oldParent.children.firstIndex(where: { $0 === control }) {
+                            oldParent.removeSubview(at: idx)
+                        }
+                        loadedControls[i] = control
+                        addSubview(control, at: children.count)
+                    }
                 }
             }
             
