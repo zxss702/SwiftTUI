@@ -72,6 +72,10 @@ struct NavigationRootID: Hashable {
     /// NavigationBar 观察此值以在 toolbar 内容变化时刷新。
     var toolbarEpoch: Int = 0
 
+    /// Coalesce async toolbarEpoch bumps scheduled in the same turn.
+    @ObservationIgnored
+    private var toolbarBumpScheduled = false
+
     /// 当前页 id
     var currentPageID: AnyHashable {
         stack.last ?? AnyHashable(NavigationRootID.shared)
@@ -162,9 +166,14 @@ struct NavigationRootID: Hashable {
 
     func setToolbar(_ content: NavigationToolbarContent, for id: AnyHashable) {
         toolbars[id] = content
-        // 异步 bump，避免在页面 body 的 Observation 追踪里读写 epoch 造成循环刷新
+        // 异步 bump，避免在页面 body 的 Observation 追踪里读写 epoch 造成循环刷新。
+        // 同一轮内多次 registerToolbar 只 bump 一次。
+        guard !toolbarBumpScheduled else { return }
+        toolbarBumpScheduled = true
         Task { @MainActor [weak self] in
-            self?.toolbarEpoch &+= 1
+            guard let self else { return }
+            self.toolbarBumpScheduled = false
+            self.toolbarEpoch &+= 1
         }
     }
 
