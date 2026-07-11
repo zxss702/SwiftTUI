@@ -211,7 +211,7 @@ internal final actor POSIXTerminal: VTTerminal {
     signal(SIGWINCH, SIG_IGN)
     installCrashHandler()
 
-    self.input = VTEventStream(AsyncThrowingStream { [hIn, hOut] continuation in
+    self.input = VTEventStream(AsyncThrowingStream(bufferingPolicy: .bufferingNewest(64)) { [hIn, hOut] continuation in
       let sigwinchSource = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: .main)
       sigwinchSource.setEventHandler {
         var ws = winsize()
@@ -284,7 +284,10 @@ internal final actor POSIXTerminal: VTTerminal {
                 }
               }
             }
-            continuation.yield(events)
+            let coalesced = VTEvent.coalescingMouseMoves(events)
+            if !coalesced.isEmpty {
+              continuation.yield(coalesced)
+            }
           } catch is CancellationError {
             continuation.finish()
             break

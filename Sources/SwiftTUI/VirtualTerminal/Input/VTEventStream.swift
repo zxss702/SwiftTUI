@@ -104,9 +104,10 @@ public struct VTEventStream: AsyncSequence, Sendable {
       }
 
       while let batch = try await iterator.next() {
-        guard !batch.isEmpty else { continue }
+        let coalesced = VTEvent.coalescingMouseMoves(batch)
+        guard !coalesced.isEmpty else { continue }
 
-        self.buffer = batch
+        self.buffer = coalesced
         self.index = buffer.index(after: buffer.startIndex)
 
         return buffer[buffer.startIndex]

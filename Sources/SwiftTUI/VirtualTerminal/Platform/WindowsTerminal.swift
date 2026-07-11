@@ -204,7 +204,7 @@ internal final actor WindowsTerminal: VTTerminal {
       throw WindowsError()
     }
 
-    self.input = VTEventStream(AsyncThrowingStream { [hIn, hOut] continuation in
+    self.input = VTEventStream(AsyncThrowingStream(bufferingPolicy: .bufferingNewest(64)) { [hIn, hOut] continuation in
       Task {
         repeat {
           do {
@@ -247,7 +247,10 @@ internal final actor WindowsTerminal: VTTerminal {
               }
             }
 
-            continuation.yield(events)
+            let coalesced = VTEvent.coalescingMouseMoves(events)
+            if !coalesced.isEmpty {
+              continuation.yield(coalesced)
+            }
           } catch {
             continuation.finish(throwing: error)
           }

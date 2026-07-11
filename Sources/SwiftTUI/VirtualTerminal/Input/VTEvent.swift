@@ -27,6 +27,32 @@ public enum VTEvent: Equatable, Sendable {
   case resize(ResizeEvent)
 }
 
+extension VTEvent {
+  /// Collapse runs of mouse-move events, keeping only the latest move in each
+  /// run. Keys, clicks, scrolls, and resize events are preserved in order.
+  package static func coalescingMouseMoves(_ events: [VTEvent]) -> [VTEvent] {
+    guard events.count > 1 else { return events }
+    var result: [VTEvent] = []
+    result.reserveCapacity(events.count)
+    var pendingMove: VTEvent?
+    for event in events {
+      if case .mouse(let mouse) = event, case .move = mouse.type {
+        pendingMove = event
+        continue
+      }
+      if let move = pendingMove {
+        result.append(move)
+        pendingMove = nil
+      }
+      result.append(event)
+    }
+    if let move = pendingMove {
+      result.append(move)
+    }
+    return result
+  }
+}
+
 // MARK: - Key Event
 
 /// Modifier keys that can be held during keyboard input.
