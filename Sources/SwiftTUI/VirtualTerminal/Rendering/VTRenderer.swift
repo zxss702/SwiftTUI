@@ -238,18 +238,12 @@ public final class VTRenderer: @unchecked Sendable {
                            frames: (rendered: 0, dropped: 0))
   }
 
-  /// Renders damage spans to the terminal with optimized output.
+  /// Renders damage spans and places the soft caret inside one Synchronized Update.
   ///
-  /// This is the core rendering method that converts buffer differences
-  /// into efficient terminal commands. It performs several optimizations:
-  ///
-  /// - **Synchronized updates**: Prevents flicker during complex updates
-  /// - **Cursor optimization**: Minimizes cursor movement by leveraging auto-wrap
-  /// - **SGR state tracking**: Reduces style change commands
-  /// - **Run-length encoding**: Optimizes repeated character sequences
-  ///
-  /// The method uses terminal synchronization to ensure atomic updates
-  /// and maintains minimal cursor movement for optimal performance.
+  /// The hardware cursor follows cell writes during paint. Applying the soft
+  /// caret in a separate write after SUM ends leaves it on the last damaged
+  /// cell (often bottom-right) for one flush. Hide → paint → CUP+show inside
+  /// the same SUM avoids that jump.
   private borrowing func paint(_ damages: [DamageSpan], cursor: VTPosition?) async {
     await withBufferedOutput(terminal: terminal) { stream in
       stream <<< .SetMode([.DEC(.SynchronizedUpdate)])
