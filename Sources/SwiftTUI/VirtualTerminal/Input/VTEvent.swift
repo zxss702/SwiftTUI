@@ -28,27 +28,61 @@ public enum VTEvent: Equatable, Sendable {
 }
 
 extension VTEvent {
-  /// Collapse runs of mouse-move events, keeping only the latest move in each
-  /// run. Keys, clicks, scrolls, and resize events are preserved in order.
+  /// Collapse runs of mouse-move events (keep latest) and consecutive scroll
+  /// events (sum deltas). Keys, clicks, and resize events are preserved in order.
   package static func coalescingMouseMoves(_ events: [VTEvent]) -> [VTEvent] {
     guard events.count > 1 else { return events }
     var result: [VTEvent] = []
     result.reserveCapacity(events.count)
     var pendingMove: VTEvent?
-    for event in events {
-      if case .mouse(let mouse) = event, case .move = mouse.type {
-        pendingMove = event
-        continue
-      }
+    var pendingScroll: (position: Position, deltaX: Int, deltaY: Int)?
+
+    func flushMove() {
       if let move = pendingMove {
         result.append(move)
         pendingMove = nil
       }
+    }
+
+    func flushScroll() {
+      if let scroll = pendingScroll {
+        result.append(.mouse(MouseEvent(
+          position: scroll.position,
+          type: .scroll(deltaX: scroll.deltaX, deltaY: scroll.deltaY)
+        )))
+        pendingScroll = nil
+      }
+    }
+
+    for event in events {
+      if case .mouse(let mouse) = event {
+        switch mouse.type {
+        case .move:
+          flushScroll()
+          pendingMove = event
+          continue
+        case .scroll(let deltaX, let deltaY):
+          flushMove()
+          if let existing = pendingScroll {
+            pendingScroll = (
+              position: mouse.position,
+              deltaX: existing.deltaX + deltaX,
+              deltaY: existing.deltaY + deltaY
+            )
+          } else {
+            pendingScroll = (position: mouse.position, deltaX: deltaX, deltaY: deltaY)
+          }
+          continue
+        default:
+          break
+        }
+      }
+      flushMove()
+      flushScroll()
       result.append(event)
     }
-    if let move = pendingMove {
-      result.append(move)
-    }
+    flushMove()
+    flushScroll()
     return result
   }
 }

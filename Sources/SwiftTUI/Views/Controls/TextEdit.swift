@@ -398,7 +398,8 @@ private final class TextEditorControl: Control {
     override func handleMouseEvent(_ event: MouseEvent) {
         guard isEnabledFlag else { return }
         ensureVisualLines()
-        if case .scroll(_, let deltaY) = event.type {
+        switch event.type {
+        case .scroll(_, let deltaY):
             let maxOffset = max(0, visualLines.count - layer.frame.size.height.intValue)
             contentOffset += Extended(deltaY)
             if contentOffset.intValue < 0 { contentOffset = 0 }
@@ -412,15 +413,34 @@ private final class TextEditorControl: Control {
                 cursorIndex = getIndex(forVisualPosition: contentOffset.intValue + frameHeight - 1, col: pos.col)
             }
             layer.invalidate()
-        } else if case .pressed(.left) = event.type {
-            let local = event.position - absoluteFrame.position
-            let visualY = local.line.intValue + contentOffset.intValue
-            cursorIndex = getIndex(forVisualPosition: visualY, col: local.column.intValue)
-            scrollToKeepCursorVisible()
+        case .pressed(.left):
+            placeCursor(at: event.position)
+            window?.mouseCapture = self
             layer.invalidate()
-        } else {
+        case .move:
+            guard window?.mouseCapture === self else {
+                super.handleMouseEvent(event)
+                return
+            }
+            placeCursor(at: event.position)
+            layer.invalidate()
+        case .released(.left):
+            if window?.mouseCapture === self {
+                window?.mouseCapture = nil
+            }
+            // Final place in case release lands on a different cell than last move.
+            placeCursor(at: event.position)
+            layer.invalidate()
+        default:
             super.handleMouseEvent(event)
         }
+    }
+
+    private func placeCursor(at absolutePosition: Position) {
+        let local = absolutePosition - absoluteFrame.position
+        let visualY = local.line.intValue + contentOffset.intValue
+        cursorIndex = getIndex(forVisualPosition: visualY, col: local.column.intValue)
+        scrollToKeepCursorVisible()
     }
 
     override func becomeFirstResponder() {
