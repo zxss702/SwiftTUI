@@ -259,9 +259,7 @@ public class Application {
             updateScheduled = false
             iterations += 1
             if iterations > Self.maxUpdateIterations {
-                #if DEBUG
-                print("SwiftTUI: update loop exceeded \(Self.maxUpdateIterations) iterations; breaking to avoid freeze")
-                #endif
+                // Break silently: never write to stdout/stderr — that corrupts the TUI.
                 break
             }
 
