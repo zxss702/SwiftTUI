@@ -29,9 +29,13 @@ import Foundation
     }
     
     func updateNode(_ node: Node) {
+        let previous = node.view as? Self
         node.view = self
         node.children[0].update(using: content.view)
         let control = node.control as! ZStackControl
+        if previous?.alignment != alignment {
+            node.root.application?.requestLayout()
+        }
         control.alignment = alignment
     }
     

@@ -27,12 +27,17 @@ private struct Padding<Content: View>: View, PrimitiveView, ModifierView {
     }
     
     func updateNode(_ node: Node) {
+        let previous = node.view as? Self
         node.view = self
         node.children[0].update(using: content.view)
+        let paddingChanged = previous?.edges != edges || previous?.length != length
         for control in node.controls?.values ?? [] {
             let control = control as! PaddingControl
             control.edges = edges
             control.length = length
+        }
+        if paddingChanged {
+            node.root.application?.requestLayout()
         }
     }
     

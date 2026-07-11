@@ -98,6 +98,7 @@ final class Node {
             for i in 0 ..< node.size {
                 insertControl(at: node.offset + i)
             }
+            root.application?.requestLayout()
         }
     }
 
@@ -106,6 +107,7 @@ final class Node {
             for i in (0 ..< children[index].size).reversed() {
                 removeControl(at: children[index].offset + i)
             }
+            root.application?.requestLayout()
         }
         children[index].parent = nil
         children.remove(at: index)

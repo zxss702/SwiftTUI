@@ -212,14 +212,24 @@ public class Application {
         }
     }
 
-    func invalidateNode(_ node: Node) {
+    /// Marks a node for content rebuild. Does **not** force a full-tree layout by default —
+    /// layout is requested separately when structure or measured size actually changes.
+    func invalidateNode(_ node: Node, layout: Bool = false) {
         if !invalidatedNodes.contains(where: { $0 === node }) {
             invalidatedNodes.append(node)
-            needsLayout = true
             scheduleUpdate()
+        }
+        if layout {
+            needsLayout = true
         }
         // 已 present 的面板是快照树外的节点；状态变化时刷新栈内内容（嵌套 sheet 等）
         window.popupPresenter?.noteContentInvalidated()
+    }
+
+    /// Request a full control-tree layout on the next update pass.
+    func requestLayout() {
+        needsLayout = true
+        scheduleUpdate()
     }
 
     func scheduleUpdate() {

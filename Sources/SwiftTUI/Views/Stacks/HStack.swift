@@ -27,11 +27,16 @@ import Foundation
     }
 
     func updateNode(_ node: Node) {
+        let previous = node.view as? Self
         node.view = self
         node.children[0].update(using: content.view)
         let control = node.control as! HStackControl
+        let newSpacing = spacing ?? 1
+        if previous?.alignment != alignment || control.spacing != newSpacing {
+            node.root.application?.requestLayout()
+        }
         control.alignment = alignment
-        control.spacing = spacing ?? 1
+        control.spacing = newSpacing
     }
 
     func insertControl(at index: Int, node: Node) {

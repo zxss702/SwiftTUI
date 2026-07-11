@@ -45,6 +45,9 @@ import Foundation
         setupEnvironmentProperties(node: node)
         node.view = self
         let control = node.control as! TextControl
+        let previousText = control.text
+        let previousLineLimit = control.lineLimit
+        let previousTruncation = control.truncationMode
         control.text = displayString
         control.foregroundColor = foregroundColor
         control.bold = bold
@@ -53,6 +56,23 @@ import Foundation
         control.strikethrough = strikethrough
         control.lineLimit = lineLimit
         control.truncationMode = truncationMode
+        // Only reflow when measured size would change; pure repaints skip full-tree layout.
+        if previousText != control.text
+            || previousLineLimit != lineLimit
+            || previousTruncation != truncationMode
+        {
+            let width = control.layer.frame.size.width
+            if width > 0 {
+                let measured = control.size(proposedSize: Size(width: width, height: .infinity))
+                if measured.height != control.layer.frame.size.height
+                    || measured.width != control.layer.frame.size.width
+                {
+                    node.root.application?.requestLayout()
+                }
+            } else {
+                node.root.application?.requestLayout()
+            }
+        }
         control.layer.invalidate()
     }
 
