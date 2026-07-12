@@ -7,6 +7,7 @@ import GRDB
 
 public typealias Predicate<T: PersistentModel> = JsonDataCore.Predicate<T>
 public typealias SortDescriptor<T: PersistentModel> = JsonDataCore.SortDescriptor<T>
+public typealias FetchDescriptor<T: PersistentModel> = JsonDataCore.FetchDescriptor<T>
 #endif
 
 // A wrapper to ensure NotificationCenter observers are removed when the node is destroyed
@@ -23,15 +24,39 @@ private final class NotificationTokenBox {
 @MainActor
 @propertyWrapper
 public struct Query<Element: PersistentModel>: AnyState {
-    private let filter: Predicate<Element>?
-    private let sort: [SortDescriptor<Element>]
+    private let descriptor: FetchDescriptor<Element>
     
     // We use StateReference to receive the node injected by View's reflection.
     var valueReference = StateReference()
 
     public init(filter: Predicate<Element>? = nil, sort: [SortDescriptor<Element>] = []) {
-        self.filter = filter
-        self.sort = sort
+        self.descriptor = FetchDescriptor(predicate: filter, sortBy: sort)
+    }
+
+    public init<Value: Comparable>(
+        filter: Predicate<Element>? = nil,
+        sort keyPath: any KeyPath<Element, Value> & Sendable,
+        order: SortOrder = .forward
+    ) {
+        self.descriptor = FetchDescriptor(
+            predicate: filter,
+            sortBy: [SortDescriptor(keyPath, order: order)]
+        )
+    }
+
+    public init<Value: Comparable>(
+        filter: Predicate<Element>? = nil,
+        sort keyPath: any KeyPath<Element, Value?> & Sendable,
+        order: SortOrder = .forward
+    ) {
+        self.descriptor = FetchDescriptor(
+            predicate: filter,
+            sortBy: [SortDescriptor(keyPath, order: order)]
+        )
+    }
+
+    public init(_ descriptor: FetchDescriptor<Element>) {
+        self.descriptor = descriptor
     }
 
     public var wrappedValue: [Element] {
@@ -66,7 +91,7 @@ public struct Query<Element: PersistentModel>: AnyState {
             }
             
             // 2. Initial fetch and store in node.state (imitating @State)
-            let descriptor = FetchDescriptor<Element>(predicate: filter, sortBy: sort)
+            let descriptor = self.descriptor
             let items = (try? context.fetch(descriptor)) ?? []
             node.state[label] = items
             
