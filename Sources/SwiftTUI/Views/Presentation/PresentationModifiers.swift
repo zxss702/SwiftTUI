@@ -9,26 +9,36 @@ enum PresentationKind {
 
 /// `isPresented` 绑定的 sheet / alert。
 @MainActor
-struct PresentationBindingModifier<Content: View, Presented: View>: View {
+struct PresentationBindingModifier<Content: View, Presented: View>: View, PrimitiveView {
     let kind: PresentationKind
-    @Binding var isPresented: Bool
+    let isPresented: Binding<Bool>
     let onDismiss: (() -> Void)?
     let presented: () -> Presented
     let content: Content
 
-    @Environment(PopupPresenter.self) private var presenter
-    @State private var sessionID: UUID?
+    static var size: Int? { Content.size }
 
-    var body: some View {
-        let _ = sync()
-        content
+    func buildNode(_ node: Node) {
+        node.addNode(at: 0, Node(view: content.view))
+        sync(node)
     }
 
-    private func sync() {
-        if isPresented {
+    func updateNode(_ node: Node) {
+        node.view = self
+        node.children[0].update(using: content.view)
+        sync(node)
+    }
+
+    private func sync(_ node: Node) {
+        let env = NavigationEnvironment.values(from: node)
+        guard let presenter = env[PopupPresenter.self] else { return }
+
+        let sessionKey = "presentation.sessionID"
+        if isPresented.wrappedValue {
+            let sessionID = node.state[sessionKey] as? UUID
             let stillOurs = sessionID.map { presenter.contains($0) } ?? false
             if !stillOurs {
-                let binding = $isPresented
+                let binding = isPresented
                 let onDismiss = self.onDismiss
                 let finish = {
                     if binding.wrappedValue { binding.wrappedValue = false }
@@ -37,20 +47,20 @@ struct PresentationBindingModifier<Content: View, Presented: View>: View {
                 let id: UUID
                 switch kind {
                 case .sheet:
-                    id = presenter.presentSheet(onDismiss: {
-                        sessionID = nil
+                    id = presenter.presentSheet(environmentSource: node, onDismiss: {
+                        node.state[sessionKey] = nil
                         finish()
                     }, content: presented)
                 case .alert:
-                    id = presenter.presentAlert(onDismiss: {
-                        sessionID = nil
+                    id = presenter.presentAlert(environmentSource: node, onDismiss: {
+                        node.state[sessionKey] = nil
                         finish()
                     }, content: presented)
                 }
-                sessionID = id
+                node.state[sessionKey] = id
             }
-        } else if let id = sessionID {
-            sessionID = nil
+        } else if let id = node.state[sessionKey] as? UUID {
+            node.state[sessionKey] = nil
             if presenter.contains(id) {
                 presenter.dismiss(id: id)
             }
@@ -60,60 +70,72 @@ struct PresentationBindingModifier<Content: View, Presented: View>: View {
 
 /// `item:` 绑定的 sheet。
 @MainActor
-struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: View>: View {
+struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: View>: View, PrimitiveView {
     let kind: PresentationKind
-    @Binding var item: Item?
+    let item: Binding<Item?>
     let onDismiss: (() -> Void)?
     let presented: (Item) -> Presented
     let content: Content
 
-    @Environment(PopupPresenter.self) private var presenter
-    @State private var sessionID: UUID?
-    @State private var presentedID: Item.ID?
+    static var size: Int? { Content.size }
 
-    var body: some View {
-        let _ = sync()
-        content
+    func buildNode(_ node: Node) {
+        node.addNode(at: 0, Node(view: content.view))
+        sync(node)
     }
 
-    private func sync() {
-        if let value = item {
+    func updateNode(_ node: Node) {
+        node.view = self
+        node.children[0].update(using: content.view)
+        sync(node)
+    }
+
+    private func sync(_ node: Node) {
+        let env = NavigationEnvironment.values(from: node)
+        guard let presenter = env[PopupPresenter.self] else { return }
+
+        let sessionKey = "presentation.sessionID"
+        let presentedIDKey = "presentation.presentedID"
+
+        if let value = item.wrappedValue {
+            let sessionID = node.state[sessionKey] as? UUID
+            let presentedID = node.state[presentedIDKey] as? AnyHashable
             let stillOurs = (sessionID.map { presenter.contains($0) } ?? false)
-                && presentedID == value.id
+                && presentedID == AnyHashable(value.id)
             if !stillOurs {
                 if let old = sessionID, presenter.contains(old) {
                     presenter.dismiss(id: old)
                 }
-                presentedID = value.id
-                let binding = $item
+                node.state[presentedIDKey] = AnyHashable(value.id)
+                let binding = item
                 let onDismiss = self.onDismiss
                 let finish = {
-                    presentedID = nil
+                    node.state[presentedIDKey] = nil
                     if binding.wrappedValue != nil { binding.wrappedValue = nil }
                     onDismiss?()
                 }
                 let id: UUID
                 switch kind {
                 case .sheet:
-                    id = presenter.presentSheet(onDismiss: {
-                        sessionID = nil
+                    id = presenter.presentSheet(environmentSource: node, onDismiss: {
+                        node.state[sessionKey] = nil
                         finish()
                     }) {
                         presented(value)
                     }
                 case .alert:
-                    id = presenter.presentAlert(onDismiss: {
-                        sessionID = nil
+                    id = presenter.presentAlert(environmentSource: node, onDismiss: {
+                        node.state[sessionKey] = nil
                         finish()
                     }) {
                         presented(value)
                     }
                 }
-                sessionID = id
+                node.state[sessionKey] = id
             }
-        } else if let id = sessionID {
-            sessionID = nil
-            presentedID = nil
+        } else if let id = node.state[sessionKey] as? UUID {
+            node.state[sessionKey] = nil
+            node.state[presentedIDKey] = nil
             if presenter.contains(id) {
                 presenter.dismiss(id: id)
             }
@@ -158,10 +180,14 @@ struct PopoverBindingModifier<Content: View, Presented: View>: View, PrimitiveVi
             let stillOurs = control.token.map { presenter.contains($0) } ?? false
             if !stillOurs {
                 let body = presented
-                let id = presenter.presentPopover(anchor: control.absoluteFrame, onDismiss: {
-                    control.token = nil
-                    if binding.wrappedValue { binding.wrappedValue = false }
-                }) {
+                let id = presenter.presentPopover(
+                    anchor: control.absoluteFrame,
+                    environmentSource: node,
+                    onDismiss: {
+                        control.token = nil
+                        if binding.wrappedValue { binding.wrappedValue = false }
+                    }
+                ) {
                     body()
                 }
                 control.token = id
@@ -214,11 +240,15 @@ struct PopoverItemModifier<Content: View, Item: Identifiable, Presented: View>: 
                     presenter.dismiss(id: old)
                 }
                 control.presentedID = AnyHashable(value.id)
-                let id = presenter.presentPopover(anchor: control.absoluteFrame, onDismiss: {
-                    control.token = nil
-                    control.presentedID = nil
-                    if binding.wrappedValue != nil { binding.wrappedValue = nil }
-                }) {
+                let id = presenter.presentPopover(
+                    anchor: control.absoluteFrame,
+                    environmentSource: node,
+                    onDismiss: {
+                        control.token = nil
+                        control.presentedID = nil
+                        if binding.wrappedValue != nil { binding.wrappedValue = nil }
+                    }
+                ) {
                     presented(value)
                 }
                 control.token = id
