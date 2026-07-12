@@ -243,21 +243,25 @@ import Foundation
         override func layout(size: Size) {
             super.layout(size: size)
 
-            // Lay out in index order so measured heights feed later position() calls.
+            // Same contract as VStack: propose the stack width, then layout at the
+            // child's measured size (so wrap uses the proposal; frame size stays honest).
             var heightsChanged = false
             let indices = loadedControls.keys.sorted()
             for index in indices {
                 guard let control = loadedControls[index] else { continue }
 
-                let measured = control.size(proposedSize: Size(width: size.width, height: .infinity))
-                let itemHeight = measured.height == .infinity ? estimatedItemHeight : measured.height
-                if measuredHeights[index] != itemHeight {
+                var childSize = control.size(proposedSize: Size(width: size.width, height: .infinity))
+                // Unbounded-height children cannot contribute to scroll metrics; fall back
+                // to the public estimate instead of inventing a clamped geometry.
+                if childSize.height == .infinity {
+                    childSize.height = estimatedItemHeight
+                }
+                if measuredHeights[index] != childSize.height {
                     heightsChanged = true
                 }
-                measuredHeights[index] = itemHeight
+                measuredHeights[index] = childSize.height
 
-                // Full stack width so Text wraps against the viewport, not shrink-wrapped content width.
-                control.layout(size: Size(width: size.width, height: itemHeight))
+                control.layout(size: childSize)
                 control.layer.frame.position.line = position(for: index)
 
                 switch alignment {
@@ -267,7 +271,6 @@ import Foundation
                 }
             }
 
-            // Force the next visible-window pass to recompute indices after real heights land.
             if heightsChanged {
                 lastStartIndex = nil
                 lastEndIndex = nil
