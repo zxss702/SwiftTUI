@@ -37,7 +37,19 @@ struct PresentationBindingModifier<Content: View, Presented: View>: View, Primit
         if isPresented.wrappedValue {
             let sessionID = node.state[sessionKey] as? UUID
             let stillOurs = sessionID.map { presenter.contains($0) } ?? false
-            if !stillOurs {
+            if stillOurs, let sessionID {
+                // 宿主状态变了但 session 仍在：刷新 makePanel，让嵌套 sheet 等读到最新 Binding。
+                let presented = self.presented
+                let kind = self.kind
+                presenter.updateMakePanel(id: sessionID) { [weak presenter] in
+                    Self.makePanel(
+                        kind: kind,
+                        id: sessionID,
+                        presenter: presenter,
+                        presented: presented
+                    )
+                }
+            } else if !stillOurs {
                 let binding = isPresented
                 let onDismiss = self.onDismiss
                 let finish = {
@@ -60,10 +72,31 @@ struct PresentationBindingModifier<Content: View, Presented: View>: View, Primit
                 node.state[sessionKey] = id
             }
         } else if let id = node.state[sessionKey] as? UUID {
+            // isPresented → false：先清 session，再 dismiss，避免 onDismiss/finish 重入时误判 stillOurs。
             node.state[sessionKey] = nil
             if presenter.contains(id) {
                 presenter.dismiss(id: id)
             }
+        }
+    }
+
+    private static func makePanel(
+        kind: PresentationKind,
+        id: UUID,
+        presenter: PopupPresenter?,
+        presented: @escaping () -> Presented
+    ) -> AnyView {
+        switch kind {
+        case .sheet:
+            return AnyView(SheetPanel(content: presented().environment(\.dismiss, DismissAction {
+                presenter?.dismiss(id: id)
+            })))
+        case .alert:
+            return AnyView(
+                AlertPanel(content: presented())
+                    .environment(\.dismiss, DismissAction { presenter?.dismiss(id: id) })
+                    .environment(\.buttonDismissesPresentation, true)
+            )
         }
     }
 }
@@ -102,7 +135,19 @@ struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: Vi
             let presentedID = node.state[presentedIDKey] as? AnyHashable
             let stillOurs = (sessionID.map { presenter.contains($0) } ?? false)
                 && presentedID == AnyHashable(value.id)
-            if !stillOurs {
+            if stillOurs, let sessionID {
+                let presented = self.presented
+                let kind = self.kind
+                let current = value
+                presenter.updateMakePanel(id: sessionID) { [weak presenter] in
+                    Self.makePanel(
+                        kind: kind,
+                        id: sessionID,
+                        presenter: presenter,
+                        presented: { presented(current) }
+                    )
+                }
+            } else if !stillOurs {
                 if let old = sessionID, presenter.contains(old) {
                     presenter.dismiss(id: old)
                 }
@@ -139,6 +184,26 @@ struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: Vi
             if presenter.contains(id) {
                 presenter.dismiss(id: id)
             }
+        }
+    }
+
+    private static func makePanel(
+        kind: PresentationKind,
+        id: UUID,
+        presenter: PopupPresenter?,
+        presented: @escaping () -> Presented
+    ) -> AnyView {
+        switch kind {
+        case .sheet:
+            return AnyView(SheetPanel(content: presented().environment(\.dismiss, DismissAction {
+                presenter?.dismiss(id: id)
+            })))
+        case .alert:
+            return AnyView(
+                AlertPanel(content: presented())
+                    .environment(\.dismiss, DismissAction { presenter?.dismiss(id: id) })
+                    .environment(\.buttonDismissesPresentation, true)
+            )
         }
     }
 }
@@ -178,7 +243,18 @@ struct PopoverBindingModifier<Content: View, Presented: View>: View, PrimitiveVi
 
         if binding.wrappedValue {
             let stillOurs = control.token.map { presenter.contains($0) } ?? false
-            if !stillOurs {
+            if stillOurs, let id = control.token {
+                let body = presented
+                let anchor = control.absoluteFrame
+                if let record = presenter.record(id: id) {
+                    record.anchor = anchor
+                }
+                presenter.updateMakePanel(id: id) { [weak presenter] in
+                    AnyView(PopoverPanel(content: body().environment(\.dismiss, DismissAction {
+                        presenter?.dismiss(id: id)
+                    })))
+                }
+            } else if !stillOurs {
                 let body = presented
                 let id = presenter.presentPopover(
                     anchor: control.absoluteFrame,
@@ -235,7 +311,19 @@ struct PopoverItemModifier<Content: View, Item: Identifiable, Presented: View>: 
         if let value = binding.wrappedValue {
             let stillOurs = (control.token.map { presenter.contains($0) } ?? false)
                 && control.presentedID == AnyHashable(value.id)
-            if !stillOurs {
+            if stillOurs, let id = control.token {
+                let presented = self.presented
+                let current = value
+                let anchor = control.absoluteFrame
+                if let record = presenter.record(id: id) {
+                    record.anchor = anchor
+                }
+                presenter.updateMakePanel(id: id) { [weak presenter] in
+                    AnyView(PopoverPanel(content: presented(current).environment(\.dismiss, DismissAction {
+                        presenter?.dismiss(id: id)
+                    })))
+                }
+            } else if !stillOurs {
                 if let old = control.token, presenter.contains(old) {
                     presenter.dismiss(id: old)
                 }

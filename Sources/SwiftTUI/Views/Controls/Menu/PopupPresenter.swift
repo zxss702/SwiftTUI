@@ -18,7 +18,7 @@ final class PresentationRecord: Identifiable {
     let id: UUID
     let kind: PopupKind
     /// 每次刷新重建面板，保证 Binding / 嵌套 present 能随状态更新。
-    let makePanel: () -> AnyView
+    var makePanel: () -> AnyView
     var anchor: Rect
     var panelFrame: Rect?
     let onDismiss: () -> Void
@@ -99,6 +99,13 @@ public final class PopupPresenter {
         stack.first { $0.id == id }
     }
 
+    /// 用最新内容闭包替换已 present 层的 `makePanel`（宿主 modifier 每次 sync 时调用）。
+    /// 不在这里置 `needsPanelRefresh`：调用方一定在节点 update 路径上，`invalidateNode` 已标记刷新。
+    func updateMakePanel(id: UUID, makePanel: @escaping () -> AnyView) {
+        guard let record = record(id: id) else { return }
+        record.makePanel = makePanel
+    }
+
     /// 由 Application 在节点失效时标记；update 循环末尾调用 `refreshPresentedPanels`。
     func noteContentInvalidated() {
         guard !stack.isEmpty else { return }
@@ -109,9 +116,10 @@ public final class PopupPresenter {
     func refreshPresentedPanels() {
         guard needsPanelRefresh else { return }
         needsPanelRefresh = false
-        let records = stack
-        for record in records {
-            guard let node = record.layerNode else { continue }
+        // 按 id 快照；刷新过程中嵌套 sync 可能 dismiss 上层/本层，避免更新已出栈的残留 layer。
+        let ids = stack.map(\.id)
+        for id in ids {
+            guard let record = record(id: id), let node = record.layerNode else { continue }
             node.update(using: node.view)
         }
     }
