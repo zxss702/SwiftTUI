@@ -62,50 +62,56 @@ private struct NavigationDestinationItemView<Content: View, D: Hashable, Destina
     @State private var bridge = NavigationItemBridge(clearItem: {})
 
     var body: some View {
+        // 在 body 求值时取出 class 引用；卸树后的 onDisappear 不得再碰 @State
         let navigation = context
+        let itemBridge = bridge
         let _ = navigation.registerDestination(for: D.self) { value in
             AnyView(destination(value))
         }
-        let _ = configureBridge(on: navigation)
+        let _ = configureBridge(itemBridge, on: navigation)
 
         content
             .onChange(of: item, initial: true) { _, newValue in
-                syncItemToStack(newValue, navigation: navigation)
+                syncItemToStack(newValue, bridge: itemBridge, navigation: navigation)
             }
             .onDisappear {
-                navigation.unregisterItemBridge(id: bridge.id)
+                navigation.unregisterItemBridge(id: itemBridge.id)
             }
     }
 
-    private func configureBridge(on navigation: NavigationContext) {
+    private func configureBridge(_ itemBridge: NavigationItemBridge, on navigation: NavigationContext) {
         let binding = $item
-        bridge.clearItemHandler = {
+        itemBridge.clearItemHandler = {
             if binding.wrappedValue != nil {
                 binding.wrappedValue = nil
             }
         }
-        navigation.registerItemBridge(bridge)
+        navigation.registerItemBridge(itemBridge)
     }
 
-    private func syncItemToStack(_ newValue: D?, navigation: NavigationContext) {
+    private func syncItemToStack(
+        _ newValue: D?,
+        bridge itemBridge: NavigationItemBridge,
+        navigation: NavigationContext
+    ) {
         if let newValue {
-            if bridge.presented == AnyHashable(newValue),
+            if itemBridge.presented == AnyHashable(newValue),
                let last = navigation.stack.last?.base as? D,
                last == newValue {
                 return
             }
-            if let current = bridge.presented?.base as? D,
+            if let current = itemBridge.presented?.base as? D,
                let last = navigation.stack.last?.base as? D,
                last == current {
                 navigation.pop()
             }
             navigation.push(newValue)
-            bridge.presented = AnyHashable(newValue)
-        } else if let current = bridge.presented?.base as? D {
+            itemBridge.presented = AnyHashable(newValue)
+        } else if let current = itemBridge.presented?.base as? D {
             if let last = navigation.stack.last?.base as? D, last == current {
                 navigation.pop()
             }
-            bridge.presented = nil
+            itemBridge.presented = nil
         }
     }
 }
