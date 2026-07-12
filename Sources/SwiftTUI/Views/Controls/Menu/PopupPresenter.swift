@@ -421,7 +421,7 @@ private final class FloatingPopupControl: Control {
         let maxHeight = max(spaceBelow, spaceAbove)
 
         let measured = panelControl.size(
-            proposedSize: Size(width: max(anchor.size.width + 8, 24), height: maxHeight)
+            proposedSize: Size(width: max(anchor.size.width + 8, 24), height: .infinity)
         )
         let panelSize = Size(
             width: min(max(measured.width, 8), size.width),
@@ -527,7 +527,7 @@ private final class PopoverFloatingControl: Control {
         let measured = panelControl.size(
             proposedSize: Size(
                 width: max(Extended(6), size.width),
-                height: max(Extended(2), size.height)
+                height: .infinity
             )
         )
         let ideal = Size(
@@ -668,7 +668,7 @@ private final class ModalFloatingControl: Control {
 
         let maxW = max(Extended(8), size.width - 4)
         let maxH = max(Extended(3), size.height - 2)
-        let measured = panelControl.size(proposedSize: Size(width: maxW, height: maxH))
+        let measured = panelControl.size(proposedSize: Size(width: maxW, height: .infinity))
         let panelSize = Size(
             width: min(max(measured.width, 1), maxW),
             height: min(max(measured.height, 1), maxH)
