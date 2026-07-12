@@ -205,11 +205,7 @@ public class Application {
             }
         }()
 
-        if target !== hoveredControl {
-            hoveredControl?.isHovered = false
-            target?.isHovered = true
-            hoveredControl = target
-        }
+        updateHoveredControl(to: target)
 
         if let target = target {
             target.handleMouseEvent(event)
@@ -221,6 +217,34 @@ public class Application {
         if shouldDismissPopup {
             window.popupPresenter?.dismiss()
         }
+    }
+
+    /// 悬停沿父链传播，使包在外层的 `.onHover` 在点中内部 Button / Link 时也能触发。
+    private func updateHoveredControl(to target: Control?) {
+        guard target !== hoveredControl else { return }
+
+        func ancestors(from control: Control?) -> [Control] {
+            var path: [Control] = []
+            var current = control
+            while let node = current {
+                path.append(node)
+                current = node.parent
+            }
+            return path
+        }
+
+        let oldPath = ancestors(from: hoveredControl)
+        let newPath = ancestors(from: target)
+        let newIDs = Set(newPath.map { ObjectIdentifier($0) })
+        let oldIDs = Set(oldPath.map { ObjectIdentifier($0) })
+
+        for control in oldPath where !newIDs.contains(ObjectIdentifier(control)) {
+            control.isHovered = false
+        }
+        for control in newPath.reversed() where !oldIDs.contains(ObjectIdentifier(control)) {
+            control.isHovered = true
+        }
+        hoveredControl = target
     }
 
     /// Marks a node for content rebuild. Does **not** force a full-tree layout by default —
@@ -253,9 +277,15 @@ public class Application {
     }
 
     private var isUpdating = false
+    private static let maxUpdateIterations = 4
 
     func update() async throws {
-        guard !isUpdating else { return }
+        // 重入时不能丢更新：`await present` 让出 MainActor 后 display link 可能再进这里。
+        // 只标 schedule，让当前帧结束后的下一 tick 继续 drain。
+        guard !isUpdating else {
+            scheduleUpdate()
+            return
+        }
         isUpdating = true
         defer { isUpdating = false }
 
@@ -269,21 +299,40 @@ public class Application {
             needsLayout = true
         }
 
-        let nodes = invalidatedNodes
-        invalidatedNodes = []
-        for node in nodes where node.isAttached(to: self) {
-            node.update(using: node.view)
-        }
+        // dismiss / Observation 可能在 update 中同步弄脏更多节点（OverlayHost 卸层）。
+        // 必须在同一帧内继续 drain，否则 isPresented=false 后 sheet/popover 会卡住一帧甚至更久。
+        var iterations = 0
+        while iterations < Self.maxUpdateIterations {
+            iterations += 1
 
-        // 刷新 present 面板（嵌套 sheet 等依赖 Binding 的内容）
-        window.popupPresenter?.refreshPresentedPanels()
+            let nodes = invalidatedNodes
+            invalidatedNodes = []
+            let hasNodes = !nodes.isEmpty
+            for node in nodes where node.isAttached(to: self) {
+                node.update(using: node.view)
+            }
 
-        // Layout may request another pass (e.g. structural change during GeometryReader sync).
-        var layoutPasses = 0
-        while needsLayout, layoutPasses < 4 {
-            needsLayout = false
-            control.layout(size: window.layer.frame.size)
-            layoutPasses += 1
+            let presenter = window.popupPresenter
+            let hadPanelRefresh = presenter?.needsPanelRefresh == true
+            presenter?.refreshPresentedPanels()
+
+            var layoutPasses = 0
+            while needsLayout, layoutPasses < 4 {
+                needsLayout = false
+                control.layout(size: window.layer.frame.size)
+                layoutPasses += 1
+            }
+
+            let needsAnother =
+                !invalidatedNodes.isEmpty
+                || needsLayout
+                || presenter?.needsPanelRefresh == true
+            if !hasNodes, !hadPanelRefresh, !needsAnother {
+                break
+            }
+            if iterations == Self.maxUpdateIterations, needsAnother {
+                scheduleUpdate()
+            }
         }
 
         renderer.update()

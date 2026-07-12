@@ -40,10 +40,11 @@ final class Node {
         withObservationTracking {
             view.updateNode(self)
         } onChange: { [weak self] in
-            Task { @MainActor in
-                if let self = self {
-                    self.root.application?.invalidateNode(self)
-                }
+            // PopupPresenter.stack 等在 MainActor 上变更；同步 invalidate，
+            // 让 Application.update 的 drain 同帧卸掉 sheet/popover。
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.root.application?.invalidateNode(self)
             }
         }
     }
@@ -78,10 +79,9 @@ final class Node {
             withObservationTracking {
                 self.view.buildNode(self)
             } onChange: { [weak self] in
-                Task { @MainActor in
-                    if let self = self {
-                        self.root.application?.invalidateNode(self)
-                    }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.root.application?.invalidateNode(self)
                 }
             }
             built = true
