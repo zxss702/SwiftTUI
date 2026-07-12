@@ -71,15 +71,26 @@ import Foundation
 
         override func layout(size: Size) {
             super.layout(size: size)
-            let contentSize = contentControl.size(proposedSize: Size(width: size.width, height: .infinity))
-            cachedContentSize = contentSize
+            var contentSize = contentControl.size(proposedSize: Size(width: size.width, height: .infinity))
             // Viewport or content height may have changed (e.g. window resize);
             // re-clamp so a previous "scrolled to bottom" offset does not leave
             // the bottom content floating in the middle of a taller viewport.
-            let maxOffset = max(Extended(0), contentSize.height - size.height)
+            var maxOffset = max(Extended(0), contentSize.height - size.height)
             contentOffset = min(max(Extended(0), contentOffset), maxOffset)
             contentControl.updateVisibleRegion(offset: contentOffset, height: size.height)
             contentControl.layout(size: contentSize)
+
+            // Lazy stacks measure real row heights during layout; content size may grow.
+            // Refine once so ScrollView's scroll range matches wrapped multi-line rows.
+            let refined = contentControl.size(proposedSize: Size(width: size.width, height: .infinity))
+            if refined.height != contentSize.height || refined.width != contentSize.width {
+                contentSize = refined
+                maxOffset = max(Extended(0), contentSize.height - size.height)
+                contentOffset = min(max(Extended(0), contentOffset), maxOffset)
+                contentControl.updateVisibleRegion(offset: contentOffset, height: size.height)
+                contentControl.layout(size: contentSize)
+            }
+            cachedContentSize = contentSize
             applyContentOffset(invalidateLayer: true)
         }
 
@@ -118,6 +129,16 @@ import Foundation
             )
             if lazyNeedsLayout {
                 contentControl.layout(size: cachedContentSize)
+                let refined = contentControl.size(
+                    proposedSize: Size(width: layer.frame.size.width, height: .infinity)
+                )
+                if refined.height != cachedContentSize.height || refined.width != cachedContentSize.width {
+                    cachedContentSize = refined
+                    let refinedMax = max(Extended(0), cachedContentSize.height - viewportHeight)
+                    contentOffset = min(max(Extended(0), contentOffset), refinedMax)
+                    contentControl.updateVisibleRegion(offset: contentOffset, height: viewportHeight)
+                    contentControl.layout(size: cachedContentSize)
+                }
             }
 
             applyContentOffset(invalidateLayer: false)

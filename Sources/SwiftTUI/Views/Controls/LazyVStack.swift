@@ -4,11 +4,18 @@ import Foundation
     public let content: Content
     let alignment: HorizontalAlignment
     let spacing: Extended?
+    let estimatedItemHeight: Extended
 
-    public init(alignment: HorizontalAlignment = .leading, spacing: Extended? = nil, @ViewBuilder _ content: () -> Content) {
+    public init(
+        alignment: HorizontalAlignment = .leading,
+        spacing: Extended? = nil,
+        estimatedItemHeight: Extended = 1,
+        @ViewBuilder _ content: () -> Content
+    ) {
         self.content = content()
         self.alignment = alignment
         self.spacing = spacing
+        self.estimatedItemHeight = estimatedItemHeight
     }
 
     static var size: Int? { 1 }
@@ -23,7 +30,11 @@ import Foundation
 
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: content.view))
-        node.control = LazyVStackControl(alignment: alignment, spacing: spacing ?? 0)
+        node.control = LazyVStackControl(
+            alignment: alignment,
+            spacing: spacing ?? 0,
+            estimatedItemHeight: estimatedItemHeight
+        )
         node.environment = { $0.stackOrientation = .vertical }
     }
 
@@ -33,6 +44,7 @@ import Foundation
         let control = node.control as! LazyVStackControl
         control.alignment = alignment
         control.spacing = spacing ?? 0
+        control.estimatedItemHeight = estimatedItemHeight
         // Reuse already-mounted controls; only drop out-of-range entries and refresh
         // the visible window. Clearing the cache without removeSubview used to
         // duplicate children on every parent @State refresh.
@@ -47,9 +59,10 @@ import Foundation
         // Handled dynamically by LazyVStackControl
     }
 
-        private class LazyVStackControl: Control, LazyControl {
+    private class LazyVStackControl: Control, LazyControl {
         var alignment: HorizontalAlignment
         var spacing: Extended
+        var estimatedItemHeight: Extended
         weak var contentNode: Node?
         var totalChildrenSize: Int = 0
 
@@ -59,9 +72,13 @@ import Foundation
         private var lastEndIndex: Int?
 
         private var loadedControls: [Int: Control] = [:]
+        /// Measured heights for items that have been laid out; kept across unload so
+        /// scroll-back reuses the last known size until the next measure.
+        private var measuredHeights: [Int: Extended] = [:]
 
         func clearCache() {
             unloadAllLoadedControls()
+            measuredHeights.removeAll()
             lastStartIndex = nil
             lastEndIndex = nil
         }
@@ -76,6 +93,9 @@ import Foundation
             }
             for i in toRemove {
                 unloadControl(at: i)
+            }
+            for key in measuredHeights.keys where key >= totalChildrenSize {
+                measuredHeights.removeValue(forKey: key)
             }
             lastStartIndex = nil
             lastEndIndex = nil
@@ -94,35 +114,91 @@ import Foundation
                 removeSubview(at: idx)
             }
             loadedControls.removeValue(forKey: index)
+            // Keep measuredHeights[index] so total size / scroll mapping stay stable.
         }
 
-        init(alignment: HorizontalAlignment, spacing: Extended) {
+        init(alignment: HorizontalAlignment, spacing: Extended, estimatedItemHeight: Extended) {
             self.alignment = alignment
             self.spacing = spacing
+            self.estimatedItemHeight = estimatedItemHeight
+        }
+
+        private func height(at index: Int) -> Extended {
+            measuredHeights[index] ?? estimatedItemHeight
+        }
+
+        private func position(for index: Int) -> Extended {
+            guard index > 0 else { return 0 }
+            var line: Extended = 0
+            for i in 0 ..< index {
+                line += height(at: i)
+                line += spacing
+            }
+            return line
+        }
+
+        private func totalContentHeight() -> Extended {
+            guard totalChildrenSize > 0 else { return 0 }
+            var total: Extended = 0
+            for i in 0 ..< totalChildrenSize {
+                total += height(at: i)
+            }
+            total += Extended(max(0, totalChildrenSize - 1)) * spacing
+            return total
+        }
+
+        /// First index whose frame intersects [offset, offset + viewportHeight).
+        private func firstVisibleIndex(offset: Extended) -> Int {
+            guard totalChildrenSize > 0 else { return 0 }
+            if offset <= 0 { return 0 }
+            var line: Extended = 0
+            for i in 0 ..< totalChildrenSize {
+                let itemHeight = height(at: i)
+                let next = line + itemHeight
+                if next > offset { return i }
+                line = next + spacing
+            }
+            return totalChildrenSize - 1
+        }
+
+        /// Last index whose frame intersects [offset, offset + viewportHeight).
+        private func lastVisibleIndex(offset: Extended, viewportHeight: Extended) -> Int {
+            guard totalChildrenSize > 0 else { return 0 }
+            let bottom = offset + viewportHeight
+            var line: Extended = 0
+            var last = 0
+            for i in 0 ..< totalChildrenSize {
+                let itemHeight = height(at: i)
+                if line < bottom {
+                    last = i
+                } else {
+                    break
+                }
+                line += itemHeight + spacing
+            }
+            return last
         }
 
         @discardableResult
         override func updateVisibleRegion(offset: Extended, height: Extended) -> Bool {
             lastOffset = offset
             lastHeight = height
-            
+
             guard let contentNode = contentNode, totalChildrenSize > 0 else { return false }
 
-            let estimatedRowHeight: Extended = 1 + spacing
             let buffer: Int = 5 // Load a few items before and after
-
             let safeHeight = height == .infinity ? 100 : height
-            let offsetInt = (offset / estimatedRowHeight).intValue
-            let endOffsetInt = ((offset + safeHeight) / estimatedRowHeight).intValue
-            
-            let startIndex = max(0, offsetInt - buffer)
-            let endIndex = min(totalChildrenSize - 1, endOffsetInt + buffer)
-            
+
+            let rawStart = firstVisibleIndex(offset: offset)
+            let rawEnd = lastVisibleIndex(offset: offset, viewportHeight: safeHeight)
+            let startIndex = max(0, rawStart - buffer)
+            let endIndex = min(totalChildrenSize - 1, rawEnd + buffer)
+
             if startIndex > endIndex { return false }
             if startIndex == lastStartIndex && endIndex == lastEndIndex { return false }
             lastStartIndex = startIndex
             lastEndIndex = endIndex
-            
+
             // Incremental diff: only remove items that went off-screen
             var toRemove: [Int] = []
             for (i, _) in loadedControls {
@@ -155,42 +231,46 @@ import Foundation
                     }
                 }
             }
-            
+
             layer.invalidate()
             return true
         }
 
         override func size(proposedSize: Size) -> Size {
-            let estimatedRowHeight: Extended = 1
-            let totalHeight = Extended(totalChildrenSize) * estimatedRowHeight + Extended(max(0, totalChildrenSize - 1)) * spacing
-            return Size(width: proposedSize.width, height: totalHeight)
+            return Size(width: proposedSize.width, height: totalContentHeight())
         }
 
         override func layout(size: Size) {
             super.layout(size: size)
-            
-            let estimatedRowHeight: Extended = 1 + spacing
-            
-            for control in children {
-                // Find index of this control
-                var index = 0
-                for (i, c) in loadedControls {
-                    if c === control {
-                        index = i
-                        break
-                    }
+
+            // Lay out in index order so measured heights feed later position() calls.
+            var heightsChanged = false
+            let indices = loadedControls.keys.sorted()
+            for index in indices {
+                guard let control = loadedControls[index] else { continue }
+
+                let measured = control.size(proposedSize: Size(width: size.width, height: .infinity))
+                let itemHeight = measured.height == .infinity ? estimatedItemHeight : measured.height
+                if measuredHeights[index] != itemHeight {
+                    heightsChanged = true
                 }
-                
-                let childSize = control.size(proposedSize: Size(width: size.width, height: .infinity))
-                control.layout(size: childSize)
-                
-                control.layer.frame.position.line = Extended(index) * estimatedRowHeight
-                
+                measuredHeights[index] = itemHeight
+
+                // Full stack width so Text wraps against the viewport, not shrink-wrapped content width.
+                control.layout(size: Size(width: size.width, height: itemHeight))
+                control.layer.frame.position.line = position(for: index)
+
                 switch alignment {
                 case .leading: control.layer.frame.position.column = 0
                 case .center: control.layer.frame.position.column = (size.width - control.layer.frame.size.width) / 2
                 case .trailing: control.layer.frame.position.column = size.width - control.layer.frame.size.width
                 }
+            }
+
+            // Force the next visible-window pass to recompute indices after real heights land.
+            if heightsChanged {
+                lastStartIndex = nil
+                lastEndIndex = nil
             }
         }
     }
