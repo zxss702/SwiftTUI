@@ -76,37 +76,51 @@ public class Application {
         try await update()
 
         isRunning = true
-        for try await event in terminal.input {
-            if !isRunning { break }
-            let isScroll: Bool
-            switch event {
-            case .resize(let resizeEvent):
-                handleWindowSizeChange(size: resizeEvent.size)
-                isScroll = false
-            case .key(let keyEvent):
-                handleKeyInput(keyEvent)
-                isScroll = false
-            case .mouse(let mouseEvent):
-                handleMouseInput(mouseEvent)
-                if case .scroll = mouseEvent.type { isScroll = true } else { isScroll = false }
-            }
-            if !isRunning { break }
-            
-            // 键鼠与滚动都立刻刷新：否则 Binding/@State 要等下一次输入才上屏
-            //（POSIX 上 scheduleUpdate 的 Task 会被 input await 饿死）。
-            if updateScheduled || isScroll {
-                try? await update()
+        
+        let terminalInput = terminal.input
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Task 1: input loop
+            group.addTask { [weak self] in
+                for try await event in terminalInput {
+                    let isRunning = await self?.isRunning ?? false
+                    if !isRunning { break }
+                    await self?.handleTerminalEvent(event)
+                    let stillRunning = await self?.isRunning ?? false
+                    if !stillRunning { break }
+                }
             }
             
-            #if canImport(SwiftData)
-            // macOS SwiftData relies on CFRunLoop to autosave and post notifications.
-            // Since we use an AsyncStream event loop, we manually check and save changes here.
-            flushSwiftDataIfNeeded()
-            #endif
+            // Task 2: rendering loop (DisplayLink)
+            let link = VTDisplayLink(fps: 60) { [weak self] _ in
+                let isRunning = await self?.isRunning ?? false
+                if !isRunning { throw CancellationError() }
+                
+                let scheduled = await self?.updateScheduled ?? false
+                if scheduled {
+                    try await self?.update()
+                }
+            }
+            link.add(to: &group)
+            
+            try await group.next()
+            group.cancelAll()
         }
+        
         // Reset terminal on exit
         self.vtRenderer = nil
         self.renderer.vtRenderer = nil
+    }
+
+    @MainActor
+    private func handleTerminalEvent(_ event: VTEvent) {
+        switch event {
+        case .resize(let resizeEvent):
+            self.handleWindowSizeChange(size: resizeEvent.size)
+        case .key(let keyEvent):
+            self.handleKeyInput(keyEvent)
+        case .mouse(let mouseEvent):
+            self.handleMouseInput(mouseEvent)
+        }
     }
     var swiftDataContext: ModelContext?
     #if canImport(SwiftData)
@@ -235,17 +249,12 @@ public class Application {
     }
 
     func scheduleUpdate() {
-        if !updateScheduled {
-            Task { @MainActor [weak self] in
-                try? await self?.update()
-            }
-            updateScheduled = true
-        }
+        updateScheduled = true
     }
 
     private var isUpdating = false
     private var needsAnotherUpdate = false
-    private static let maxUpdateIterations = 8
+    private static let maxUpdateIterations = 4
 
     func update() async throws {
         guard !isUpdating else {
@@ -261,7 +270,8 @@ public class Application {
             updateScheduled = false
             iterations += 1
             if iterations > Self.maxUpdateIterations {
-                // Break silently: never write to stdout/stderr — that corrupts the TUI.
+                // Too many state ping-pongs inside a single frame. Let the next display link tick catch it.
+                scheduleUpdate()
                 break
             }
 
@@ -291,25 +301,29 @@ public class Application {
             }
 
             renderer.update()
-            if let vtRenderer = vtRenderer {
-                // Soft caret must share the paint's Synchronized Update; a
-                // separate CUP after present leaves the HW cursor on the last
-                // damaged cell (often bottom-right) for one flush.
-                let softCursor: VTPosition?
-                if let responder = window.firstResponder, let cursor = responder.cursorPosition {
-                    let absPos = responder.absoluteFrame.position
-                    softCursor = VTPosition(
-                        row: absPos.line.intValue + cursor.line.intValue + 1,
-                        column: absPos.column.intValue + cursor.column.intValue + 1
-                    )
-                } else {
-                    softCursor = nil
-                }
-                isPresenting = true
-                await vtRenderer.present(cursor: softCursor)
-                isPresenting = false
-            }
+            
+            #if canImport(SwiftData)
+            // Flush DB after rendering state changes
+            flushSwiftDataIfNeeded()
+            #endif
         } while needsAnotherUpdate
+        
+        // Final presentation to VT
+        if let vtRenderer = vtRenderer {
+            let softCursor: VTPosition?
+            if let responder = window.firstResponder, let cursor = responder.cursorPosition {
+                let absPos = responder.absoluteFrame.position
+                softCursor = VTPosition(
+                    row: absPos.line.intValue + cursor.line.intValue + 1,
+                    column: absPos.column.intValue + cursor.column.intValue + 1
+                )
+            } else {
+                softCursor = nil
+            }
+            isPresenting = true
+            await vtRenderer.present(cursor: softCursor)
+            isPresenting = false
+        }
     }
 
     private func handleWindowSizeChange(size: Size) {
