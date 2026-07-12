@@ -49,7 +49,7 @@ import Foundation
             return nil
         }
 
-        /// 高度按内容收缩；仅当内容超过提案高度时才占满提案高度（由外层决定上限）。
+        /// 默认占满全部高度，顶部对齐（对齐 SwiftUI）。
         override func size(proposedSize: Size) -> Size {
             let contentSize = contentControl.size(
                 proposedSize: Size(width: proposedSize.width, height: .infinity)
@@ -58,7 +58,7 @@ import Foundation
             if proposedSize.height == .infinity {
                 height = contentSize.height
             } else {
-                height = min(contentSize.height, proposedSize.height)
+                height = proposedSize.height
             }
             let width: Extended
             if proposedSize.width == .infinity {
