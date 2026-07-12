@@ -114,6 +114,8 @@ private struct NavigationBar: View {
 
 // MARK: - Page
 
+/// 只挂载当前可见页（根或栈顶），与 SwiftUI NavigationStack 的展示模型一致：
+/// path 驱动内容；源页不必为了 item 同步而常驻隐藏树。
 @MainActor
 private struct NavigationPage<Root: View>: View {
     let root: Root

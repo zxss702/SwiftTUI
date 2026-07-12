@@ -16,7 +16,7 @@ public extension View {
     }
 
     /// 用可选 Binding 驱动入栈/出栈，对齐 SwiftUI `navigationDestination(item:destination:)`。
-    /// `item` 非 `nil` 时 push；变为 `nil` 或用户返回时 pop 并清空 Binding。
+    /// `item` 非 `nil` 时 push；变为 `nil` 或用户返回时由 `NavigationContext` 清空 Binding。
     func navigationDestination<D: Hashable, C: View>(
         item: Binding<D?>,
         @ViewBuilder destination: @escaping (D) -> C
@@ -50,6 +50,8 @@ private struct NavigationDestinationView<Content: View, D: Hashable, Destination
 
 // MARK: - NavigationDestinationItemView
 
+/// - item → push：源页仍在树上时由本视图完成
+/// - pop → 清 item：由 `NavigationContext` 持有的 bridge 完成（不依赖源页仍挂树 / 不观察 stack）
 @MainActor
 private struct NavigationDestinationItemView<Content: View, D: Hashable, Destination: View>: View {
     @Binding var item: D?
@@ -57,52 +59,53 @@ private struct NavigationDestinationItemView<Content: View, D: Hashable, Destina
     let content: Content
 
     @Environment(NavigationContext.self) private var context
-    @State private var presented: D?
+    @State private var bridge = NavigationItemBridge(clearItem: {})
 
     var body: some View {
-        let _ = context.registerDestination(for: D.self) { value in
+        let navigation = context
+        let _ = navigation.registerDestination(for: D.self) { value in
             AnyView(destination(value))
         }
+        let _ = configureBridge(on: navigation)
 
         content
             .onChange(of: item, initial: true) { _, newValue in
-                syncItemToStack(newValue)
+                syncItemToStack(newValue, navigation: navigation)
             }
-            .onChange(of: context.stack) { _, _ in
-                syncStackToItem()
+            .onDisappear {
+                navigation.unregisterItemBridge(id: bridge.id)
             }
     }
 
-    private func syncItemToStack(_ newValue: D?) {
+    private func configureBridge(on navigation: NavigationContext) {
+        let binding = $item
+        bridge.clearItemHandler = {
+            if binding.wrappedValue != nil {
+                binding.wrappedValue = nil
+            }
+        }
+        navigation.registerItemBridge(bridge)
+    }
+
+    private func syncItemToStack(_ newValue: D?, navigation: NavigationContext) {
         if let newValue {
-            if presented == newValue,
-               let last = context.stack.last?.base as? D,
+            if bridge.presented == AnyHashable(newValue),
+               let last = navigation.stack.last?.base as? D,
                last == newValue {
                 return
             }
-            if let presented,
-               let last = context.stack.last?.base as? D,
-               last == presented {
-                context.pop()
+            if let current = bridge.presented?.base as? D,
+               let last = navigation.stack.last?.base as? D,
+               last == current {
+                navigation.pop()
             }
-            context.push(newValue)
-            presented = newValue
-        } else if let presented {
-            if let last = context.stack.last?.base as? D, last == presented {
-                context.pop()
+            navigation.push(newValue)
+            bridge.presented = AnyHashable(newValue)
+        } else if let current = bridge.presented?.base as? D {
+            if let last = navigation.stack.last?.base as? D, last == current {
+                navigation.pop()
             }
-            self.presented = nil
-        }
-    }
-
-    private func syncStackToItem() {
-        guard let presented else { return }
-        let stillPresent = context.stack.contains { ($0.base as? D) == presented }
-        if !stillPresent {
-            self.presented = nil
-            if item != nil {
-                item = nil
-            }
+            bridge.presented = nil
         }
     }
 }

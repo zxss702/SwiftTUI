@@ -109,6 +109,10 @@ struct NavigationRootID: Hashable {
     @ObservationIgnored
     var pathSync: NavigationPathSync?
 
+    /// `navigationDestination(item:)` 注册的 binding 桥：pop / path 变更时由 Context 清空 item，不依赖源页仍挂在树上。
+    @ObservationIgnored
+    private var itemBridges: [UUID: NavigationItemBridge] = [:]
+
     public init() {}
 
     // MARK: - 栈操作
@@ -133,9 +137,26 @@ struct NavigationRootID: Hashable {
         toolbars.removeValue(forKey: removed)
         toolbarEpoch &+= 1
         syncToBinding()
+        notifyItemBridges()
     }
 
     var canPop: Bool { !stack.isEmpty }
+
+    // MARK: - Item binding bridges
+
+    func registerItemBridge(_ bridge: NavigationItemBridge) {
+        itemBridges[bridge.id] = bridge
+    }
+
+    func unregisterItemBridge(id: UUID) {
+        itemBridges.removeValue(forKey: id)
+    }
+
+    private func notifyItemBridges() {
+        for bridge in itemBridges.values {
+            bridge.stackDidChange(stack)
+        }
+    }
 
     // MARK: - Destinations / Title
 
@@ -206,10 +227,35 @@ struct NavigationRootID: Hashable {
         let newStack = pathSync.read()
         guard newStack != stack else { return }
         stack = newStack
+        notifyItemBridges()
     }
 
     private func syncToBinding() {
         pathSync?.write(stack)
+    }
+}
+
+// MARK: - navigationDestination(item:) bridge
+
+/// 由 Context 在栈变化时回调，清空已不在栈上的 item Binding（对齐 SwiftUI：导航系统拥有 path↔item 同步）。
+@MainActor
+final class NavigationItemBridge {
+    let id: UUID
+    /// 当前由该 bridge push 上去的值；与源页生命周期解耦。
+    var presented: AnyHashable?
+    var clearItemHandler: () -> Void
+
+    init(id: UUID = UUID(), clearItem: @escaping () -> Void = {}) {
+        self.id = id
+        self.clearItemHandler = clearItem
+    }
+
+    func stackDidChange(_ stack: [AnyHashable]) {
+        guard let presented else { return }
+        if !stack.contains(presented) {
+            self.presented = nil
+            clearItemHandler()
+        }
     }
 }
 
