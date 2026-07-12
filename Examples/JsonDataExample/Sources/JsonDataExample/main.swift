@@ -26,7 +26,7 @@ final class TaskItem {
 struct ContentView: View {
     @Environment(\.modelContext) var modelContext
     
-    @SwiftTUI.Query(sort: \.createdAt, order: .forward)
+    @Query(sort: \.createdAt, order: .forward)
     var tasks: [TaskItem]
 
     var body: some View {
