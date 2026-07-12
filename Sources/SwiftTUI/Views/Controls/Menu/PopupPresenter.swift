@@ -26,18 +26,22 @@ final class PresentationRecord: Identifiable {
     weak var hostControl: Control?
     /// 悬浮层 Node，用于状态变化时原地刷新面板内容。
     weak var layerNode: Node?
+    /// 发起 present 的视图节点；叠层挂在根 Overlay 上，需从此处继承 Environment。
+    weak var environmentSource: Node?
 
     init(
         id: UUID = UUID(),
         kind: PopupKind,
         anchor: Rect,
         onDismiss: @escaping () -> Void,
+        environmentSource: Node? = nil,
         makePanel: @escaping () -> AnyView
     ) {
         self.id = id
         self.kind = kind
         self.anchor = anchor
         self.onDismiss = onDismiss
+        self.environmentSource = environmentSource
         self.makePanel = makePanel
     }
 
@@ -115,8 +119,9 @@ public final class PopupPresenter {
     // MARK: - Menu（现有）
 
     @discardableResult
-    public func present<V: View>(
+    func present<V: View>(
         anchor: Rect,
+        environmentSource: Node? = nil,
         onDismiss: @escaping () -> Void = {},
         @ViewBuilder content: @escaping () -> V
     ) -> UUID {
@@ -126,6 +131,7 @@ public final class PopupPresenter {
             kind: .menu,
             anchor: anchor,
             onDismiss: onDismiss,
+            environmentSource: environmentSource,
             makePanel: { [weak self] in
                 AnyView(
                     PopupMenuPanel(content: content())
@@ -138,12 +144,14 @@ public final class PopupPresenter {
 
     /// 无明确锚点时，居中偏上显示（菜单样式）。
     @discardableResult
-    public func presentCentered<V: View>(
+    func presentCentered<V: View>(
+        environmentSource: Node? = nil,
         onDismiss: @escaping () -> Void = {},
         @ViewBuilder content: @escaping () -> V
     ) -> UUID {
         present(
             anchor: Rect(position: Position(column: 2, line: 2), size: Size(width: 1, height: 1)),
+            environmentSource: environmentSource,
             onDismiss: onDismiss,
             content: content
         )
@@ -153,6 +161,7 @@ public final class PopupPresenter {
 
     @discardableResult
     func presentSheet<V: View>(
+        environmentSource: Node? = nil,
         onDismiss: @escaping () -> Void = {},
         @ViewBuilder content: @escaping () -> V
     ) -> UUID {
@@ -162,6 +171,7 @@ public final class PopupPresenter {
             kind: .sheet,
             anchor: .zero,
             onDismiss: onDismiss,
+            environmentSource: environmentSource,
             makePanel: { [weak self] in
                 AnyView(SheetPanel(content: content().environment(\.dismiss, DismissAction {
                     self?.dismiss(id: id)
@@ -173,6 +183,7 @@ public final class PopupPresenter {
     @discardableResult
     func presentPopover<V: View>(
         anchor: Rect,
+        environmentSource: Node? = nil,
         onDismiss: @escaping () -> Void = {},
         @ViewBuilder content: @escaping () -> V
     ) -> UUID {
@@ -182,6 +193,7 @@ public final class PopupPresenter {
             kind: .popover,
             anchor: anchor,
             onDismiss: onDismiss,
+            environmentSource: environmentSource,
             makePanel: { [weak self] in
                 AnyView(PopoverPanel(content: content().environment(\.dismiss, DismissAction {
                     self?.dismiss(id: id)
@@ -192,6 +204,7 @@ public final class PopupPresenter {
 
     @discardableResult
     func presentAlert<V: View>(
+        environmentSource: Node? = nil,
         onDismiss: @escaping () -> Void = {},
         @ViewBuilder content: @escaping () -> V
     ) -> UUID {
@@ -201,6 +214,7 @@ public final class PopupPresenter {
             kind: .alert,
             anchor: .zero,
             onDismiss: onDismiss,
+            environmentSource: environmentSource,
             makePanel: { [weak self] in
                 AnyView(
                     AlertPanel(content: content())
@@ -246,6 +260,7 @@ public final class PopupPresenter {
         kind: PopupKind,
         anchor: Rect,
         onDismiss: @escaping () -> Void,
+        environmentSource: Node? = nil,
         makePanel: @escaping () -> AnyView
     ) -> UUID {
         // 菜单：同级再开时先收起顶层菜单，避免菜单叠菜单；模态/popover 允许嵌套。
@@ -257,6 +272,7 @@ public final class PopupPresenter {
             kind: kind,
             anchor: anchor,
             onDismiss: onDismiss,
+            environmentSource: environmentSource,
             makePanel: makePanel
         )
         stack.append(record)
@@ -305,6 +321,23 @@ private struct PresentationChrome: View {
 
 // MARK: - Panel attach helper
 
+/// 叠层挂在根 `PopupOverlayHost` 下，默认只有根上的 `PopupPresenter`。
+/// 把发起方节点上的 Environment（NavigationContext、业务 Observable 等）注入叠层节点。
+@MainActor
+private func installInheritedEnvironment(on node: Node, from source: Node?) {
+    guard let source else {
+        node.environment = nil
+        return
+    }
+    node.environment = { [weak source] env in
+        guard let source else { return }
+        let inherited = NavigationEnvironment.values(from: source)
+        for (key, value) in inherited.values {
+            env.values[key] = value
+        }
+    }
+}
+
 @MainActor
 private func attachPanel(to host: Control, panel: Control, stored: inout Control!) {
     if stored === panel, host.children.contains(where: { $0 === panel }) {
@@ -332,6 +365,7 @@ private struct FloatingPopupLayer: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         entry.layerNode = node
+        installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.addNode(at: 0, Node(view: entry.makePanel().view))
         let control = FloatingPopupControl(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
@@ -343,6 +377,7 @@ private struct FloatingPopupLayer: View, PrimitiveView {
     func updateNode(_ node: Node) {
         entry.layerNode = node
         node.view = self
+        installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.children[0].update(using: entry.makePanel().view)
         let control = node.control as! FloatingPopupControl
         control.entry = entry
@@ -433,6 +468,7 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         entry.layerNode = node
+        installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.addNode(at: 0, Node(view: entry.makePanel().view))
         let control = PopoverFloatingControl(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
@@ -444,6 +480,7 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
     func updateNode(_ node: Node) {
         entry.layerNode = node
         node.view = self
+        installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.children[0].update(using: entry.makePanel().view)
         let control = node.control as! PopoverFloatingControl
         control.entry = entry
@@ -580,6 +617,7 @@ private struct ModalFloatingLayer: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         entry.layerNode = node
+        installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.addNode(at: 0, Node(view: entry.makePanel().view))
         let control = ModalFloatingControl(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
@@ -591,6 +629,7 @@ private struct ModalFloatingLayer: View, PrimitiveView {
     func updateNode(_ node: Node) {
         entry.layerNode = node
         node.view = self
+        installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.children[0].update(using: entry.makePanel().view)
         let control = node.control as! ModalFloatingControl
         control.entry = entry
@@ -738,18 +777,21 @@ struct PopoverPanel<Content: View>: View {
     }
 }
 
-// MARK: - 触发按钮（回调绝对 frame）
+// MARK: - 触发按钮（回调绝对 frame + 自身 Node，便于叠层继承 Environment）
 
 @MainActor
 struct PopupAnchorButton<Label: View>: View, PrimitiveView {
     let label: Label
-    let action: (Rect) -> Void
+    let action: (Rect, Node) -> Void
 
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: VStack(content: label).view))
-        let control = PopupAnchorButtonControl(action: action)
+        let control = PopupAnchorButtonControl { [weak node] anchor in
+            guard let node else { return }
+            action(anchor, node)
+        }
         control.label = node.children[0].control(at: 0)
         control.addSubview(control.label, at: 0)
         node.control = control
@@ -758,7 +800,10 @@ struct PopupAnchorButton<Label: View>: View, PrimitiveView {
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: VStack(content: label).view)
-        (node.control as! PopupAnchorButtonControl).action = action
+        (node.control as! PopupAnchorButtonControl).action = { [weak node] anchor in
+            guard let node else { return }
+            action(anchor, node)
+        }
     }
 }
 

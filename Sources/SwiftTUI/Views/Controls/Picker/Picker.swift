@@ -53,7 +53,7 @@ import Foundation
         )
     }
 
-    private func toggleMenu(anchor: Rect) {
+    private func toggleMenu(anchor: Rect, source: Node) {
         if isPresented {
             presenter.dismiss()
             isPresented = false
@@ -61,7 +61,11 @@ import Foundation
         }
         isPresented = true
         let binding = $selection
-        presenter.present(anchor: anchor, onDismiss: { isPresented = false }) {
+        presenter.present(
+            anchor: anchor,
+            environmentSource: source,
+            onDismiss: { isPresented = false }
+        ) {
             SelectAndDismissContent(
                 content: content,
                 selection: binding,

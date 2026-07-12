@@ -46,13 +46,17 @@ import Foundation
         }
     }
 
-    private func toggleMenu(anchor: Rect) {
+    private func toggleMenu(anchor: Rect, source: Node) {
         if isPresented {
             presenter.dismiss()
             isPresented = false
         } else {
             isPresented = true
-            presenter.present(anchor: anchor, onDismiss: { isPresented = false }) {
+            presenter.present(
+                anchor: anchor,
+                environmentSource: source,
+                onDismiss: { isPresented = false }
+            ) {
                 content
             }
         }
