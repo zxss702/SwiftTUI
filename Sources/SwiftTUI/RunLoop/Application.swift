@@ -253,60 +253,45 @@ public class Application {
     }
 
     private var isUpdating = false
-    private var needsAnotherUpdate = false
-    private static let maxUpdateIterations = 4
 
     func update() async throws {
-        guard !isUpdating else {
-            needsAnotherUpdate = true
-            return
-        }
+        guard !isUpdating else { return }
         isUpdating = true
         defer { isUpdating = false }
 
-        var iterations = 0
-        repeat {
-            needsAnotherUpdate = false
-            updateScheduled = false
-            iterations += 1
-            if iterations > Self.maxUpdateIterations {
-                // Too many state ping-pongs inside a single frame. Let the next display link tick catch it.
-                scheduleUpdate()
-                break
-            }
+        updateScheduled = false
 
-            if let size = pendingResizeSize {
-                pendingResizeSize = nil
-                window.layer.frame.size = size
-                vtRenderer?.resize(to: size)
-                control.layer.invalidate()
-                needsLayout = true
-            }
+        if let size = pendingResizeSize {
+            pendingResizeSize = nil
+            window.layer.frame.size = size
+            vtRenderer?.resize(to: size)
+            control.layer.invalidate()
+            needsLayout = true
+        }
 
-            let nodes = invalidatedNodes
-            invalidatedNodes = []
-            for node in nodes where node.isAttached(to: self) {
-                node.update(using: node.view)
-            }
+        let nodes = invalidatedNodes
+        invalidatedNodes = []
+        for node in nodes where node.isAttached(to: self) {
+            node.update(using: node.view)
+        }
 
-            // 刷新 present 面板（嵌套 sheet 等依赖 Binding 的内容）
-            window.popupPresenter?.refreshPresentedPanels()
+        // 刷新 present 面板（嵌套 sheet 等依赖 Binding 的内容）
+        window.popupPresenter?.refreshPresentedPanels()
 
-            // Layout may request another pass (e.g. structural change during GeometryReader sync).
-            var layoutPasses = 0
-            while needsLayout, layoutPasses < 4 {
-                needsLayout = false
-                control.layout(size: window.layer.frame.size)
-                layoutPasses += 1
-            }
+        // Layout may request another pass (e.g. structural change during GeometryReader sync).
+        var layoutPasses = 0
+        while needsLayout, layoutPasses < 4 {
+            needsLayout = false
+            control.layout(size: window.layer.frame.size)
+            layoutPasses += 1
+        }
 
-            renderer.update()
-            
-            #if canImport(SwiftData)
-            // Flush DB after rendering state changes
-            flushSwiftDataIfNeeded()
-            #endif
-        } while needsAnotherUpdate
+        renderer.update()
+        
+        #if canImport(SwiftData)
+        // Flush DB after rendering state changes
+        flushSwiftDataIfNeeded()
+        #endif
         
         // Final presentation to VT
         if let vtRenderer = vtRenderer {
