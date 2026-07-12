@@ -50,6 +50,12 @@ final class Node {
 
     var root: Node { parent?.root ?? self }
 
+    /// 是否仍挂在指定 `Application` 的视图树上。
+    /// `removeNode` 后 parent 为 nil；孤立子树的 `root` 是自身且 `application == nil`。
+    func isAttached(to application: Application) -> Bool {
+        root.application === application
+    }
+
     /// The total number of controls in the node.
     /// The node does not need to be fully built for the size to be computed.
     var size: Int {

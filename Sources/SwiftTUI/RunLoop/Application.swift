@@ -212,6 +212,11 @@ public class Application {
     /// Marks a node for content rebuild. Does **not** force a full-tree layout by default —
     /// layout is requested separately when structure or measured size actually changes.
     func invalidateNode(_ node: Node, layout: Bool = false) {
+        // 条件分支 / NavigationPage 切走后 removeNode 会把子树 parent 置 nil。
+        // Observation 仍可能回调这些已卸下的节点；若继续 update，@Environment 会沿空父链
+        // 找不到 NavigationContext 等对象。根节点 parent == nil 但 application != nil。
+        guard node.isAttached(to: self) else { return }
+
         if !invalidatedNodes.contains(where: { $0 === node }) {
             invalidatedNodes.append(node)
             scheduleUpdate()
@@ -268,10 +273,11 @@ public class Application {
                 needsLayout = true
             }
 
-            for node in invalidatedNodes {
+            let nodes = invalidatedNodes
+            invalidatedNodes = []
+            for node in nodes where node.isAttached(to: self) {
                 node.update(using: node.view)
             }
-            invalidatedNodes = []
 
             // 刷新 present 面板（嵌套 sheet 等依赖 Binding 的内容）
             window.popupPresenter?.refreshPresentedPanels()
