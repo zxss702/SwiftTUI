@@ -87,30 +87,32 @@ public struct Query<Element: PersistentModel>: AnyState {
                 return []
             }
             
-            // 1. If we already have items cached in node.state, return them
-            if let cached = node.state[label] as? [Element] {
-                return cached
-            }
-            
-            // 2. Initial fetch and store in node.state (imitating @State)
-            let descriptor = self.descriptor
-            let items = (try? context.fetch(descriptor)) ?? []
-            node.state[label] = items
-            
-            // 3. Setup observation (only once per node property)
+            // Setup observation before serving cache so first empty fetch still watches saves.
             let obsKey = "\(label)_obs"
+            let descriptor = self.descriptor
             if node.state[obsKey] == nil {
                 #if canImport(SwiftData)
-                // macOS SwiftData: Use Application observer
-                node.root.application?.swiftDataObservers.append { [weak node] in
-                    guard let n = node else { return }
-                    let updatedItems = (try? context.fetch(descriptor)) ?? []
-                    n.state[label] = updatedItems
-                    n.root.application?.invalidateNode(n)
+                // Apple SwiftData: Logorythia writes via mainContext / ModelActor, not the
+                // TUI frame flush. Watch every save on this container, then refetch.
+                let container = context.container
+                let token = NotificationCenter.default.addObserver(
+                    forName: ModelContext.didSave,
+                    object: nil,
+                    queue: nil
+                ) { [weak node] notification in
+                    guard let saved = notification.object as? ModelContext,
+                          saved.container === container
+                    else { return }
+                    Task { @MainActor in
+                        guard let n = node else { return }
+                        let updatedItems = (try? context.fetch(descriptor)) ?? []
+                        n.state[label] = updatedItems
+                        n.root.application?.invalidateNode(n)
+                    }
                 }
-                node.state[obsKey] = true
+                node.state[obsKey] = NotificationTokenBox(token)
                 #else
-                // Linux JsonData/GRDB: Use startObservation
+                // JsonData/GRDB: ValueObservation across writers on the shared queue.
                 let task = context.startObservation(
                     descriptor,
                     onError: { _ in },
@@ -125,7 +127,13 @@ public struct Query<Element: PersistentModel>: AnyState {
                 node.state[obsKey] = task
                 #endif
             }
-            
+
+            if let cached = node.state[label] as? [Element] {
+                return cached
+            }
+
+            let items = (try? context.fetch(descriptor)) ?? []
+            node.state[label] = items
             return items
         }
         nonmutating set {

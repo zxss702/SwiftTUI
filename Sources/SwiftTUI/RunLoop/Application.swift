@@ -123,29 +123,23 @@ public class Application {
         }
     }
     var swiftDataContext: ModelContext?
-    #if canImport(SwiftData)
-    var swiftDataObservers: [() -> Void] = []
-    #endif
 
     @MainActor
     private func flushSwiftDataIfNeeded() {
-        if let context = swiftDataContext {
-            if context.hasChanges {
-                try? context.save()
-                #if canImport(SwiftData)
-                for observer in swiftDataObservers {
-                    observer()
-                }
-                #endif
-            }
+        // Persist TUI-side edits; @Query refresh listens to ModelContext.didSave.
+        if let context = swiftDataContext, context.hasChanges {
+            try? context.save()
         }
     }
 
     @MainActor
     public func modelContainer(_ container: ModelContainer) -> Self {
-        let context = ModelContext(container)
+        // Share mainContext with the rest of the app (CLI agents, DatabaseActor peers).
+        // A fresh ModelContext only sees store data after another context saves — and the
+        // old flush-based @Query path never noticed those foreign saves.
+        let context = container.mainContext
         self.swiftDataContext = context
-        
+
         let oldEnv = self.node.environment
         self.node.environment = { env in
             oldEnv?(&env)
@@ -306,12 +300,10 @@ public class Application {
         }
 
         renderer.update()
-        
-        #if canImport(SwiftData)
-        // Flush DB after rendering state changes
+
+        // Flush DB after rendering state changes (didSave drives @Query).
         flushSwiftDataIfNeeded()
-        #endif
-        
+
         // Final presentation to VT
         if let vtRenderer = vtRenderer {
             let softCursor: VTPosition?
