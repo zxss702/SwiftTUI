@@ -94,18 +94,21 @@ public struct Query<Element: PersistentModel>: AnyState {
                 #if canImport(SwiftData)
                 // Apple SwiftData: Logorythia writes via mainContext / ModelActor, not the
                 // TUI frame flush. Watch every save on this container, then refetch.
-                let container = context.container
+                // Do not capture ModelContext into the @Sendable notification/Task closures.
+                let expectedContainer = ObjectIdentifier(context.container)
                 let token = NotificationCenter.default.addObserver(
                     forName: ModelContext.didSave,
                     object: nil,
                     queue: nil
                 ) { [weak node] notification in
-                    guard let saved = notification.object as? ModelContext,
-                          saved.container === container
-                    else { return }
+                    let savedContainer = (notification.object as? ModelContext)
+                        .map { ObjectIdentifier($0.container) }
+                    guard savedContainer == expectedContainer else { return }
                     Task { @MainActor in
-                        guard let n = node else { return }
-                        let updatedItems = (try? context.fetch(descriptor)) ?? []
+                        guard let n = node,
+                              let ctx = n.root.application?.swiftDataContext
+                        else { return }
+                        let updatedItems = (try? ctx.fetch(descriptor)) ?? []
                         n.state[label] = updatedItems
                         n.root.application?.invalidateNode(n)
                     }
