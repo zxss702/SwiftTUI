@@ -39,19 +39,21 @@ extension NavigationLink where Destination == Never {
 
 extension NavigationLink {
     public init(
-        @ViewBuilder destination: () -> Destination,
+        @ViewBuilder destination: @escaping () -> Destination,
         @ViewBuilder label: () -> Label
     ) {
-        let dest = AnyView(destination())
-        let uniqueID = NavigationDirectDestinationID()
+        // 与 SwiftUI 一致：点击时再构建 destination，避免列表刷新时过早求值 / 绑到错误数据。
         self.init(label: label()) { context in
-            context.pushDirect(id: uniqueID, destination: dest)
+            context.pushDirect(
+                id: NavigationDirectDestinationID(),
+                destination: AnyView(destination())
+            )
         }
     }
 }
 
 extension NavigationLink where Label == Text {
-    public init<S: StringProtocol>(_ title: S, @ViewBuilder destination: () -> Destination) {
+    public init<S: StringProtocol>(_ title: S, @ViewBuilder destination: @escaping () -> Destination) {
         self.init(destination: destination, label: { Text(String(title)) })
     }
 }

@@ -212,7 +212,11 @@ struct NavigationRootID: Hashable {
             return direct
         }
         let key = ObjectIdentifier(type(of: value.base))
-        return destinations[key]?(value)
+        guard let builder = destinations[key] else { return nil }
+        // 按 path 值缓存，避免 NavigationPage 每次 body 重建页面把 @State 初始值冲掉。
+        let view = builder(value)
+        directDestinations[value] = view
+        return view
     }
 
     // MARK: - Path sync
