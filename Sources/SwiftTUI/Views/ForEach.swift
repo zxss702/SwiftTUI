@@ -13,8 +13,8 @@ import Foundation
 
     public init(_ data: Data, id: KeyPath<Data.Element, ID>, @ViewBuilder content: @escaping (Data.Element) -> Content) {
         self.data = data
-        self.id = id
         self.content = content
+        self.id = id
 
     }
 
@@ -41,8 +41,23 @@ import Foundation
                 needsUpdate.remove(offset)
             }
         }
+
+        // 按 id 取旧元素：Equatable 且相等则跳过存活项 update
+        var lastByID: [ID: Data.Element] = [:]
+        lastByID.reserveCapacity(last.data.count)
+        for element in last.data {
+            lastByID[element[keyPath: last.id]] = element
+        }
+
         for i in needsUpdate {
-            node.children[i].update(using: content(data[data.index(data.startIndex, offsetBy:i)]).view)
+            let element = data[data.index(data.startIndex, offsetBy: i)]
+            let elementID = element[keyPath: id]
+            if let previous = lastByID[elementID],
+               StateEquality.areEqual(previous, element)
+            {
+                continue
+            }
+            node.children[i].update(using: content(element).view)
         }
     }
 }

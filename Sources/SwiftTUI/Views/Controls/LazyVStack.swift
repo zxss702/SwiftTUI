@@ -45,18 +45,17 @@ import Foundation
         control.alignment = alignment
         control.spacing = spacing ?? 0
         control.estimatedItemHeight = estimatedItemHeight
-        // Reuse already-mounted controls; only drop out-of-range entries and refresh
-        // the visible window. Clearing the cache without removeSubview used to
-        // duplicate children on every parent @State refresh.
+        // ForEach 增删会先走 insert/removeControl；这里再按 content 身份对齐缓存，
+        // 避免 index 位移后仍挂着已删行的 Control。
         control.reloadContent(totalChildrenSize: node.children[0].size)
     }
 
     func insertControl(at index: Int, node: Node) {
-        // Handled dynamically by LazyVStackControl
+        (node.control as! LazyVStackControl).handleInsert(at: index)
     }
 
     func removeControl(at index: Int, node: Node) {
-        // Handled dynamically by LazyVStackControl
+        (node.control as! LazyVStackControl).handleRemove(at: index)
     }
 
     private class LazyVStackControl: Control, LazyControl {
@@ -83,8 +82,8 @@ import Foundation
             lastEndIndex = nil
         }
 
-        /// Update data source size and refresh the visible window without
-        /// duplicating already-mounted subviews.
+        /// Sync size / visible window. Drop indices past the end, and remount any
+        /// slot whose Control no longer matches `contentNode` (ForEach middle delete).
         func reloadContent(totalChildrenSize: Int) {
             self.totalChildrenSize = totalChildrenSize
             var toRemove: [Int] = []
@@ -97,9 +96,53 @@ import Foundation
             for key in measuredHeights.keys where key >= totalChildrenSize {
                 measuredHeights.removeValue(forKey: key)
             }
+            if let contentNode {
+                for (i, ctrl) in loadedControls {
+                    let expected = contentNode.control(at: i)
+                    if ctrl !== expected {
+                        unloadControl(at: i)
+                    }
+                }
+            }
             lastStartIndex = nil
             lastEndIndex = nil
             updateVisibleRegion(offset: lastOffset, height: lastHeight)
+        }
+
+        func handleInsert(at index: Int) {
+            totalChildrenSize += 1
+            for key in loadedControls.keys.filter({ $0 >= index }).sorted(by: >) {
+                if let ctrl = loadedControls.removeValue(forKey: key) {
+                    loadedControls[key + 1] = ctrl
+                }
+            }
+            for key in measuredHeights.keys.filter({ $0 >= index }).sorted(by: >) {
+                if let height = measuredHeights.removeValue(forKey: key) {
+                    measuredHeights[key + 1] = height
+                }
+            }
+            // Remount deferred to reloadContent — keeps one sync point after ForEach diff.
+            lastStartIndex = nil
+            lastEndIndex = nil
+        }
+
+        func handleRemove(at index: Int) {
+            totalChildrenSize = max(0, totalChildrenSize - 1)
+            unloadControl(at: index)
+            measuredHeights.removeValue(forKey: index)
+            for key in loadedControls.keys.filter({ $0 > index }).sorted() {
+                if let ctrl = loadedControls.removeValue(forKey: key) {
+                    loadedControls[key - 1] = ctrl
+                }
+            }
+            for key in measuredHeights.keys.filter({ $0 > index }).sorted() {
+                if let height = measuredHeights.removeValue(forKey: key) {
+                    measuredHeights[key - 1] = height
+                }
+            }
+            // Do not remount here: removeNode still has the dying child in the tree.
+            lastStartIndex = nil
+            lastEndIndex = nil
         }
 
         private func unloadAllLoadedControls() {
@@ -114,7 +157,8 @@ import Foundation
                 removeSubview(at: idx)
             }
             loadedControls.removeValue(forKey: index)
-            // Keep measuredHeights[index] so total size / scroll mapping stay stable.
+            // Keep measuredHeights[index] so total size / scroll mapping stay stable
+            // until handleRemove / reloadContent shifts or drops the slot.
         }
 
         init(alignment: HorizontalAlignment, spacing: Extended, estimatedItemHeight: Extended) {
