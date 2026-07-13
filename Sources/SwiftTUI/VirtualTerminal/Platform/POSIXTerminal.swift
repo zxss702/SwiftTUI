@@ -299,16 +299,18 @@ internal final actor POSIXTerminal: VTTerminal {
       }
     })
 
-    // Enable mouse reporting (button-event tracking 1002 + SGR encoding 1006)
+    // Enable mouse reporting:
+    // 1003 = any-event tracking（未按键也会报 move，供 onHover）
+    // 1006 = SGR 坐标编码
     Task {
 #if canImport(Glibc)
-      _ = Glibc.write(self.hOut, "\u{1B}[?1002h", 8)
+      _ = Glibc.write(self.hOut, "\u{1B}[?1003h", 8)
       _ = Glibc.write(self.hOut, "\u{1B}[?1006h", 8)
 #elseif canImport(Musl)
-      _ = Musl.write(self.hOut, "\u{1B}[?1002h", 8)
+      _ = Musl.write(self.hOut, "\u{1B}[?1003h", 8)
       _ = Musl.write(self.hOut, "\u{1B}[?1006h", 8)
 #else
-      _ = Darwin.write(self.hOut, "\u{1B}[?1002h", 8)
+      _ = Darwin.write(self.hOut, "\u{1B}[?1003h", 8)
       _ = Darwin.write(self.hOut, "\u{1B}[?1006h", 8)
 #endif
     }
@@ -321,13 +323,13 @@ internal final actor POSIXTerminal: VTTerminal {
 
     // Disable mouse reporting
 #if canImport(Glibc)
-    _ = Glibc.write(self.hOut, "\u{1B}[?1002l", 8)
+    _ = Glibc.write(self.hOut, "\u{1B}[?1003l", 8)
     _ = Glibc.write(self.hOut, "\u{1B}[?1006l", 8)
 #elseif canImport(Musl)
-    _ = Musl.write(self.hOut, "\u{1B}[?1002l", 8)
+    _ = Musl.write(self.hOut, "\u{1B}[?1003l", 8)
     _ = Musl.write(self.hOut, "\u{1B}[?1006l", 8)
 #else
-    _ = Darwin.write(self.hOut, "\u{1B}[?1002l", 8)
+    _ = Darwin.write(self.hOut, "\u{1B}[?1003l", 8)
     _ = Darwin.write(self.hOut, "\u{1B}[?1006l", 8)
 #endif
   }

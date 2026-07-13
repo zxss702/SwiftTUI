@@ -9,7 +9,7 @@ import Musl
 #endif
 
 private func crashHandler(signal: CInt) {
-    let resetSequence = "\u{1b}[?1049l\u{1b}[?1000l\u{1b}[?1002l\u{1b}[?1015l\u{1b}[?1006l\u{1b}[?25h\u{1b}[0m\r\n"
+    let resetSequence = "\u{1b}[?1049l\u{1b}[?1000l\u{1b}[?1002l\u{1b}[?1003l\u{1b}[?1015l\u{1b}[?1006l\u{1b}[?25h\u{1b}[0m\r\n"
     resetSequence.withCString { ptr in
         _ = write(STDOUT_FILENO, ptr, strlen(ptr))
     }
