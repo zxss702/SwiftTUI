@@ -319,7 +319,9 @@ final class TextFieldControl: Control {
         guard isFirstResponder, isEnabledFlag else { return nil }
         let cursorCol = columnOffset(upTo: cursorIndex)
         let visible = cursorCol - scrollOffset
-        return Position(column: Extended(max(0, visible)), line: 0)
+        let width = max(1, layer.frame.size.width.intValue)
+        guard visible >= 0, visible < width else { return nil }
+        return Position(column: Extended(visible), line: 0)
     }
 
     override func draw(into buffer: inout ScreenBuffer) {

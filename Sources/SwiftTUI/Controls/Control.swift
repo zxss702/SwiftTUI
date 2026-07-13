@@ -24,6 +24,23 @@ import Foundation
     }
     
     var cursorPosition: Position? { nil }
+
+    /// Soft caret in window coordinates, or `nil` when clipped away by an ancestor
+    /// (e.g. ScrollView viewport). Matches `Layer.draw` clip nesting so the HW
+    /// cursor is not left on content that replaced a scrolled-off field.
+    var absoluteCursorPosition: Position? {
+        guard let local = cursorPosition else { return nil }
+        var point = local
+        var control: Control? = self
+        while let current = control {
+            let bounds = Rect(position: .zero, size: current.layer.frame.size)
+            guard !current.layer.frame.size.isEmpty, bounds.contains(point) else { return nil }
+            guard let parent = current.parent else { break }
+            point = point + current.layer.frame.position
+            control = parent
+        }
+        return absoluteFrame.position + local
+    }
     
     var isHovered: Bool = false {
         didSet {

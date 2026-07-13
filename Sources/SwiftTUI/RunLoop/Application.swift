@@ -315,11 +315,15 @@ public class Application {
         // Final presentation to VT
         if let vtRenderer = vtRenderer {
             let softCursor: VTPosition?
-            if let responder = window.firstResponder, let cursor = responder.cursorPosition {
-                let absPos = responder.absoluteFrame.position
+            if let absPos = window.firstResponder?.absoluteCursorPosition,
+               absPos.line >= 0,
+               absPos.column >= 0,
+               absPos.line < window.layer.frame.size.height,
+               absPos.column < window.layer.frame.size.width
+            {
                 softCursor = VTPosition(
-                    row: absPos.line.intValue + cursor.line.intValue + 1,
-                    column: absPos.column.intValue + cursor.column.intValue + 1
+                    row: absPos.line.intValue + 1,
+                    column: absPos.column.intValue + 1
                 )
             } else {
                 softCursor = nil
