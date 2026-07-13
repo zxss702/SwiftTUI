@@ -160,8 +160,9 @@ private struct TextFieldCore: View, PrimitiveView {
         control.submitAction = submitAction
         control.legacyAction = legacyAction
         control.secure = secure
-        control.syncFromBinding()
-        control.layer.invalidate()
+        if control.syncFromBinding() {
+            control.layer.invalidate()
+        }
     }
 }
 
@@ -207,14 +208,15 @@ final class TextFieldControl: Control {
         self.cursorIndex = cachedText.count
     }
 
-    func syncFromBinding() {
+    @discardableResult
+    func syncFromBinding() -> Bool {
         let newText = text.wrappedValue
-        if newText != cachedText {
-            cachedText = newText
-            cursorIndex = min(cursorIndex, cachedText.count)
-            maskSecureImmediately()
-            ensureCursorVisible()
-        }
+        guard newText != cachedText else { return false }
+        cachedText = newText
+        cursorIndex = min(cursorIndex, cachedText.count)
+        maskSecureImmediately()
+        ensureCursorVisible()
+        return true
     }
 
     override var selectable: Bool { isEnabledFlag }
