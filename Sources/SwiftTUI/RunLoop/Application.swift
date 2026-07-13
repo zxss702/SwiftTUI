@@ -63,11 +63,14 @@ public class Application {
         self.renderer.vtRenderer = vtRenderer
         
         let terminal = vtRenderer.terminal
-        await terminal.write("\u{1B}[?1049h\u{1B}[2J\u{1B}[H\u{1B}[?25l\u{1B}[?7l")
+        // 1049h 会清掉此前启用的鼠标模式；必须在备用屏之后再开 1003/1006，否则 move/onHover 要等焦点或点击才偶发恢复。
+        await terminal.write("\u{1B}[?1049h\u{1B}[2J\u{1B}[H\u{1B}[?25l\u{1B}[?7l\u{1B}[?1003h\u{1B}[?1006h")
         defer {
-            let seq = "\u{1B}[?25h\u{1B}[?1049l\u{1B}[?7h"
+            let seq = "\u{1B}[?25h\u{1B}[?1003l\u{1B}[?1006l\u{1B}[?1049l\u{1B}[?7h"
             seq.withCString { _ = write(STDOUT_FILENO, $0, numericCast(strlen($0))) }
             renderer.stop()
+            self.vtRenderer = nil
+            self.renderer.vtRenderer = nil
         }
         
         updateWindowSize(size: terminal.size)
@@ -76,23 +79,29 @@ public class Application {
         try await update()
 
         isRunning = true
+        defer { isRunning = false }
         
         let terminalInput = terminal.input
         try await withThrowingTaskGroup(of: Void.self) { group in
-            // Task 1: input loop
+            // Task 1: input loop — ends when stop() or stream finishes.
             group.addTask { [weak self] in
-                for try await event in terminalInput {
-                    let isRunning = await self?.isRunning ?? false
-                    if !isRunning { break }
-                    await self?.handleTerminalEvent(event)
-                    let stillRunning = await self?.isRunning ?? false
-                    if !stillRunning { break }
+                do {
+                    for try await event in terminalInput {
+                        let isRunning = await self?.isRunning ?? false
+                        if !isRunning { break }
+                        await self?.handleTerminalEvent(event)
+                        let stillRunning = await self?.isRunning ?? false
+                        if !stillRunning { break }
+                    }
+                } catch is CancellationError {
+                    // Task group cancelled after intentional stop — not a failure.
                 }
             }
             
             // Task 2: rendering loop (DisplayLink)
             let link = VTDisplayLink(fps: 60) { [weak self] _ in
                 let isRunning = await self?.isRunning ?? false
+                // Exit the link loop; Application.start() treats this as normal shutdown.
                 if !isRunning { throw CancellationError() }
                 
                 let scheduled = await self?.updateScheduled ?? false
@@ -102,13 +111,25 @@ public class Application {
             }
             link.add(to: &group)
             
-            try await group.next()
+            // First finished child: intentional stop, input EOF, or real failure.
+            let first = await group.nextResult()
             group.cancelAll()
+            while let result = await group.nextResult() {
+                if case .failure(let error) = result,
+                   !(error is CancellationError),
+                   isRunning
+                {
+                    throw error
+                }
+            }
+
+            if case .failure(let error) = first {
+                let stoppedIntentionally = !isRunning || error is CancellationError
+                if !stoppedIntentionally {
+                    throw error
+                }
+            }
         }
-        
-        // Reset terminal on exit
-        self.vtRenderer = nil
-        self.renderer.vtRenderer = nil
     }
 
     @MainActor
@@ -176,6 +197,8 @@ public class Application {
                 if case .released = event.type {
                     window.mouseCapture = nil
                 }
+                // 捕获期间也要刷新 hover，否则离开/释放后 onHover(false) 会丢
+                window.setHoveredControl(control.hitTest(position: pos))
                 return
             default:
                 break
@@ -197,6 +220,7 @@ public class Application {
             }
         }()
 
+        // 含 target == nil（移出控件区域）→ leave
         window.setHoveredControl(target)
 
         if let target = target {
@@ -283,6 +307,7 @@ public class Application {
             var layoutPasses = 0
             while needsLayout, layoutPasses < 4 {
                 needsLayout = false
+                control.invalidateSizeCache()
                 control.layout(size: window.layer.frame.size)
                 layoutPasses += 1
             }

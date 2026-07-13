@@ -250,28 +250,34 @@ internal final actor POSIXTerminal: VTTerminal {
               return sequences.compactMap { sequence -> VTEvent? in
                 switch sequence {
                 case .mouse(let button, let column, let row, let kind):
+                  // SGR 编码：bit5=运动(32)、bit6=滚轮(64)、低 2 位=按键；修饰键占用其它位。
                   let mouseType: MouseEventType
+                  let isMotion = (button & 32) != 0
+                  let isWheel = (button & 64) != 0
+                  let btn = button & 3
                   if kind == "m" {
-                    switch button & 3 {
+                    switch btn {
                     case 0: mouseType = .released(.left)
                     case 1: mouseType = .released(.middle)
                     case 2: mouseType = .released(.right)
                     default: mouseType = .released(.left)
                     }
+                  } else if isWheel {
+                    switch btn {
+                    case 0: mouseType = .scroll(deltaX: 0, deltaY: -1)
+                    case 1: mouseType = .scroll(deltaX: 0, deltaY: 1)
+                    case 2: mouseType = .scroll(deltaX: -1, deltaY: 0)
+                    default: mouseType = .scroll(deltaX: 1, deltaY: 0)
+                    }
+                  } else if isMotion {
+                    mouseType = .move
                   } else {
-                    switch button {
+                    switch btn {
                     case 0: mouseType = .pressed(.left)
                     case 1: mouseType = .pressed(.middle)
                     case 2: mouseType = .pressed(.right)
-                    case 3: mouseType = .released(.left)
-                    case 64: mouseType = .scroll(deltaX: 0, deltaY: -1)
-                    case 65: mouseType = .scroll(deltaX: 0, deltaY: 1)
-                    default:
-                      if button >= 32 && button < 64 {
-                        mouseType = .move // Drag event
-                      } else {
-                        return nil
-                      }
+                    case 3: mouseType = .released(.left) // X10 legacy
+                    default: return nil
                     }
                   }
                   let evt = MouseEvent(
@@ -299,21 +305,19 @@ internal final actor POSIXTerminal: VTTerminal {
       }
     })
 
-    // Enable mouse reporting:
+    // Enable mouse reporting（Application.start 进入 1049 备用屏后还会再写一次）：
     // 1003 = any-event tracking（未按键也会报 move，供 onHover）
     // 1006 = SGR 坐标编码
-    Task {
 #if canImport(Glibc)
-      _ = Glibc.write(self.hOut, "\u{1B}[?1003h", 8)
-      _ = Glibc.write(self.hOut, "\u{1B}[?1006h", 8)
+    _ = Glibc.write(self.hOut, "\u{1B}[?1003h", 8)
+    _ = Glibc.write(self.hOut, "\u{1B}[?1006h", 8)
 #elseif canImport(Musl)
-      _ = Musl.write(self.hOut, "\u{1B}[?1003h", 8)
-      _ = Musl.write(self.hOut, "\u{1B}[?1006h", 8)
+    _ = Musl.write(self.hOut, "\u{1B}[?1003h", 8)
+    _ = Musl.write(self.hOut, "\u{1B}[?1006h", 8)
 #else
-      _ = Darwin.write(self.hOut, "\u{1B}[?1003h", 8)
-      _ = Darwin.write(self.hOut, "\u{1B}[?1006h", 8)
+    _ = Darwin.write(self.hOut, "\u{1B}[?1003h", 8)
+    _ = Darwin.write(self.hOut, "\u{1B}[?1006h", 8)
 #endif
-    }
   }
 
   deinit {
