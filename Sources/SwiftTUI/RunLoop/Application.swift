@@ -171,8 +171,6 @@ public class Application {
         window.firstResponder?.handleKeyEvent(event)
     }
 
-    private var hoveredControl: Control?
-
     private func handleMouseInput(_ event: MouseEvent) {
         let pos = event.position
 
@@ -205,7 +203,7 @@ public class Application {
             }
         }()
 
-        updateHoveredControl(to: target)
+        window.setHoveredControl(target)
 
         if let target = target {
             target.handleMouseEvent(event)
@@ -217,34 +215,6 @@ public class Application {
         if shouldDismissPopup {
             window.popupPresenter?.dismiss()
         }
-    }
-
-    /// 悬停沿父链传播，使包在外层的 `.onHover` 在点中内部 Button / Link 时也能触发。
-    private func updateHoveredControl(to target: Control?) {
-        guard target !== hoveredControl else { return }
-
-        func ancestors(from control: Control?) -> [Control] {
-            var path: [Control] = []
-            var current = control
-            while let node = current {
-                path.append(node)
-                current = node.parent
-            }
-            return path
-        }
-
-        let oldPath = ancestors(from: hoveredControl)
-        let newPath = ancestors(from: target)
-        let newIDs = Set(newPath.map { ObjectIdentifier($0) })
-        let oldIDs = Set(oldPath.map { ObjectIdentifier($0) })
-
-        for control in oldPath where !newIDs.contains(ObjectIdentifier(control)) {
-            control.isHovered = false
-        }
-        for control in newPath.reversed() where !oldIDs.contains(ObjectIdentifier(control)) {
-            control.isHovered = true
-        }
-        hoveredControl = target
     }
 
     /// Marks a node for content rebuild. Does **not** force a full-tree layout by default —

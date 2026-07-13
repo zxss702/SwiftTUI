@@ -51,20 +51,12 @@ import Foundation
     }
 
     func removeSubview(at index: Int) {
-        if children[index].isFirstResponder || root.window?.firstResponder?.isDescendant(of: children[index]) == true {
-            let fallback = root.firstSelectableElement
-            // Prefer a sibling/ancestor selectable that is not inside the removed subtree.
-            let next: Control?
-            if let fallback, !fallback.isDescendant(of: children[index]), fallback !== children[index] {
-                next = fallback
-            } else {
-                next = nil
-            }
-            root.window?.setFirstResponder(next)
-        }
-        children[index].willRemoveFromParent()
-        assignWindow(nil, to: children[index])
-        children[index].parent = nil
+        let removing = children[index]
+        // 与 Navigation / 条件分支卸树同一路径：先交出窗口交互指针，再拆树。
+        window?.resignInteraction(in: removing)
+        removing.willRemoveFromParent()
+        assignWindow(nil, to: removing)
+        removing.parent = nil
         self.children.remove(at: index)
         layer.removeLayer(at: index)
         for i in index ..< children.count {
