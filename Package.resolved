@@ -1,5 +1,5 @@
 {
-  "originHash" : "a474d2f43dc41e7901699585d9e32ad5085f6beaf6d63686a65007806c2ee35b",
+  "originHash" : "655c167a5f75c8db2edb2f315f6b5ede05c9196e37f6bd886cc046ca347f12ea",
   "pins" : [
     {
       "identity" : "jsondata",
@@ -7,7 +7,7 @@
       "location" : "https://github.com/zxss702/JsonData.git",
       "state" : {
         "branch" : "main",
-        "revision" : "1b16066408e0f955f08fed0d3470f0ef7092c707"
+        "revision" : "01ce9c5a862de15b75b5c6ea7cab17c5701a61d1"
       }
     },
     {
