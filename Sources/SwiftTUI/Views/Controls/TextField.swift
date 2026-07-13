@@ -324,6 +324,12 @@ final class TextFieldControl: Control {
 
     override func draw(into buffer: inout ScreenBuffer) {
         let width = max(1, layer.frame.size.width.intValue)
+        // 先清行再画字。不能用 `cell(at:) == nil` 填空格：VT 路径下 cell(at:) 恒为 nil，
+        // 会把刚写入的正文整行盖成空格（表现为有光标/有内容却看不到字）。
+        for x in 0 ..< width {
+            buffer.setCell(Cell(char: " "), at: Position(column: Extended(x), line: 0))
+        }
+
         let display: String
         let color: Color
         if cachedText.isEmpty {
@@ -337,9 +343,9 @@ final class TextFieldControl: Control {
             color = .default
         }
 
-        let totalWidth = display.width
-        var startCol = 0
         if cachedText.isEmpty {
+            let totalWidth = display.width
+            let startCol: Int
             switch alignment {
             case .leading: startCol = 0
             case .center: startCol = max(0, (width - totalWidth) / 2)
@@ -350,12 +356,6 @@ final class TextFieldControl: Control {
             ensureCursorVisible()
             let slice = visibleSlice(of: display, window: width)
             drawString(slice, at: 0, color: color, faint: false, into: &buffer, maxWidth: width)
-        }
-
-        for x in 0 ..< width {
-            if buffer.cell(at: Position(column: Extended(x), line: 0)) == nil {
-                buffer.setCell(Cell(char: " "), at: Position(column: Extended(x), line: 0))
-            }
         }
     }
 
