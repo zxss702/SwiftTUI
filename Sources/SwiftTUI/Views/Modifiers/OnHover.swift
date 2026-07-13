@@ -1,14 +1,16 @@
 import Foundation
 
 public extension View {
-    func onHover(perform action: @escaping @Sendable (Bool) -> Void) -> some View {
-        return OnHover(content: self, action: action)
+    /// 鼠标进入/离开时回调。在 MainActor 上调用，可直接改 `@State` 等（对齐 SwiftUI）。
+    func onHover(perform action: @escaping @MainActor (Bool) -> Void) -> some View {
+        OnHover(content: self, action: action)
     }
 }
 
+@MainActor
 private struct OnHover<Content: View>: View, PrimitiveView, ModifierView {
     let content: Content
-    let action: @Sendable (Bool) -> Void
+    let action: @MainActor (Bool) -> Void
 
     static var size: Int? { Content.size }
 
@@ -31,10 +33,10 @@ private struct OnHover<Content: View>: View, PrimitiveView, ModifierView {
         return onHoverControl
     }
 
-    private class OnHoverControl: Control {
-        var action: @Sendable (Bool) -> Void
+    private final class OnHoverControl: Control {
+        var action: @MainActor (Bool) -> Void
 
-        init(action: @escaping @Sendable (Bool) -> Void) {
+        init(action: @escaping @MainActor (Bool) -> Void) {
             self.action = action
         }
 
