@@ -239,25 +239,29 @@ public final class PopupPresenter {
         dismiss(id: top.id)
     }
 
-    /// 关闭指定层，并一并关闭其上的所有层（父级关闭时子 present 跟着走）。
+    /// 关闭指定层，并一并关闭其上所有层（父级关闭时子 present 跟着走）。
     public func dismiss(id: UUID) {
         guard let index = stack.firstIndex(where: { $0.id == id }) else { return }
         let removed = Array(stack[index...])
+        let window = removed.lazy.reversed().compactMap(\.hostControl?.window).first
+            ?? stack.first?.hostControl?.window
         stack.removeSubrange(index...)
         for record in removed.reversed() {
             record.onDismiss()
         }
-        restoreFocusToTop()
+        restoreFocus(afterDismissToWindow: window)
     }
 
     /// 清空整栈。
     public func dismissAll() {
         guard !stack.isEmpty else { return }
         let removed = stack
+        let window = removed.lazy.reversed().compactMap(\.hostControl?.window).first
         stack = []
         for record in removed.reversed() {
             record.onDismiss()
         }
+        restoreFocus(afterDismissToWindow: window)
     }
 
     // MARK: - Private
@@ -287,9 +291,16 @@ public final class PopupPresenter {
         return id
     }
 
-    private func restoreFocusToTop() {
-        guard let control = stack.last?.hostControl else { return }
-        stealFocus(control)
+    private func restoreFocus(afterDismissToWindow window: Window?) {
+        if let control = stack.last?.hostControl {
+            stealFocus(control)
+            return
+        }
+        // 栈空时必须把焦点还给主界面；否则 firstResponder 仍停在已卸下的 sheet 控件上。
+        DispatchQueue.main.async {
+            guard let window else { return }
+            window.setFirstResponder(window.controls.first?.firstSelectableElement)
+        }
     }
 }
 
