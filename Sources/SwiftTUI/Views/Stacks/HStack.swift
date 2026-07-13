@@ -63,7 +63,7 @@ import Foundation
             var remainingItems = children.count
             for control in children.sorted(by: Self.layoutOrder(height: proposedSize.height)) {
                 let remainingWidth = (size.width == .infinity) ? .infinity : (proposedSize.width - size.width)
-                let childSize = control.size(proposedSize: Size(width: remainingWidth / Extended(remainingItems), height: proposedSize.height))
+                let childSize = control.sizeCached(proposedSize: Size(width: remainingWidth / Extended(remainingItems), height: proposedSize.height))
                 size.width += childSize.width
                 if remainingItems > 1 {
                     size.width += spacing
@@ -79,7 +79,7 @@ import Foundation
             var remainingItems = children.count
             var remainingWidth = size.width
             for control in children.sorted(by: Self.layoutOrder(height: size.height)) {
-                let childSize = control.size(proposedSize: Size(width: remainingWidth / Extended(remainingItems), height: size.height))
+                let childSize = control.sizeCached(proposedSize: Size(width: remainingWidth / Extended(remainingItems), height: size.height))
                 control.layout(size: childSize)
                 if remainingItems > 1 {
                     remainingWidth -= spacing

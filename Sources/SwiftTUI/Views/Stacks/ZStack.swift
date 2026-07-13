@@ -58,7 +58,7 @@ import Foundation
         override func size(proposedSize: Size) -> Size {
             var size: Size = .zero
             for control in children {
-                let childSize = control.size(proposedSize: Size(width: proposedSize.width, height: proposedSize.height))
+                let childSize = control.sizeCached(proposedSize: Size(width: proposedSize.width, height: proposedSize.height))
                 size.height = max(size.height, childSize.height)
                 size.width = max(size.width, childSize.width)
             }
@@ -68,7 +68,7 @@ import Foundation
         override func layout(size: Size) {
             super.layout(size: size)
             for control in children {
-                let childSize = control.size(proposedSize: Size(width: size.width, height: size.height))
+                let childSize = control.sizeCached(proposedSize: Size(width: size.width, height: size.height))
                 control.layout(size: childSize)
             }
             for control in children {

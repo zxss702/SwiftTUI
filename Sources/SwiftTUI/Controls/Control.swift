@@ -53,6 +53,7 @@ import Foundation
     func hoveredStateDidChange() {}
 
     func addSubview(_ view: Control, at index: Int) {
+        invalidateSizeCache()
         self.children.insert(view, at: index)
         layer.addLayer(view.layer, at: index)
         view.parent = self
@@ -76,6 +77,7 @@ import Foundation
         removing.parent = nil
         self.children.remove(at: index)
         layer.removeLayer(at: index)
+        invalidateSizeCache()
         for i in index ..< children.count {
             children[i].index = i
         }
@@ -109,8 +111,30 @@ import Foundation
 
     // MARK: - Layout
 
+    private var sizeCacheKey: Size?
+    private var sizeCacheValue: Size?
+
     func size(proposedSize: Size) -> Size {
         proposedSize
+    }
+
+    /// Cached `size(proposedSize:)` for stack measure/layout pairs in the same pass.
+    func sizeCached(proposedSize: Size) -> Size {
+        if sizeCacheKey == proposedSize, let sizeCacheValue {
+            return sizeCacheValue
+        }
+        let result = size(proposedSize: proposedSize)
+        sizeCacheKey = proposedSize
+        sizeCacheValue = result
+        return result
+    }
+
+    func invalidateSizeCache() {
+        sizeCacheKey = nil
+        sizeCacheValue = nil
+        for child in children {
+            child.invalidateSizeCache()
+        }
     }
 
     func layout(size: Size) {
