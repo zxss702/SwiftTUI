@@ -1,3 +1,4 @@
+import Foundation
 import Observation
 
 /// The node of a view graph.
@@ -40,12 +41,9 @@ final class Node {
         withObservationTracking {
             view.updateNode(self)
         } onChange: { [weak self] in
-            // PopupPresenter.stack 等在 MainActor 上变更；同步 invalidate，
-            // 让 Application.update 的 drain 同帧卸掉 sheet/popover。
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.root.application?.invalidateNode(self)
-            }
+            // PopupPresenter.stack 等 @Observable 在 MainActor 上变更时同步弄脏节点，
+            // 让 Application.update 的 drain 能在同一帧卸掉 sheet/popover，避免 dismiss 卡住。
+            Self.scheduleInvalidate(self)
         }
     }
 
@@ -79,15 +77,20 @@ final class Node {
             withObservationTracking {
                 self.view.buildNode(self)
             } onChange: { [weak self] in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    self.root.application?.invalidateNode(self)
-                }
+                Self.scheduleInvalidate(self)
             }
             built = true
             if !(view is OptionalView), let container = view as? LayoutRootView {
                 container.loadData(node: self)
             }
+        }
+    }
+
+    /// Observation `onChange` 在非隔离上下文触发；统一 hop 到 MainActor 再 invalidate。
+    private nonisolated static func scheduleInvalidate(_ node: Node?) {
+        guard let node else { return }
+        Task { @MainActor in
+            node.root.application?.invalidateNode(node)
         }
     }
 
