@@ -1,10 +1,11 @@
 import Foundation
 
-/// Mirrors SwiftUI `PinnedScrollableViews` for lazy containers.
-public struct PinnedScrollableViews: OptionSet, Sendable, Hashable {
-    public let rawValue: Int
+/// Views that can stick to the edges of a scrollable container while their section is visible.
+/// Aligns SwiftUICore.`PinnedScrollableViews`.
+public struct PinnedScrollableViews: OptionSet, Sendable {
+    public let rawValue: UInt32
 
-    public init(rawValue: Int) {
+    public init(rawValue: UInt32) {
         self.rawValue = rawValue
     }
 

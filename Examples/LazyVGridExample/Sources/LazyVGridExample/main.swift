@@ -15,7 +15,7 @@ struct ContentView: View {
             ]
             
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 1, estimatedRowHeight: 3) {
+                LazyVGrid(columns: columns, spacing: 1) {
                     ForEach(0..<1000, id: \.self) { index in
                         Text("Item \(index)")
                             .border()
