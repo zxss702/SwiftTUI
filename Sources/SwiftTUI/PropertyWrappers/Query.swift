@@ -29,6 +29,8 @@ public struct Query<Element: PersistentModel>: AnyState {
     // We use StateReference to receive the node injected by View's reflection.
     var valueReference = StateReference()
 
+    func seedInitialValueIfNeeded() {}
+
     public init(filter: Predicate<Element>? = nil, sort: [SortDescriptor<Element>] = []) {
         self.descriptor = FetchDescriptor(predicate: filter, sortBy: sort)
     }

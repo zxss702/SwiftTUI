@@ -9,6 +9,8 @@ extension View {
                 // multiple times, because we would be editing the same View.
                 stateValue.valueReference.node = node
                 stateValue.valueReference.label = label
+                // 用 init 里的 initialValue 种子化；已有值不覆盖（保留用户编辑）。
+                stateValue.seedInitialValueIfNeeded()
             }
             if let focusValue = value as? AnyFocusState {
                 focusValue.valueReference.node = node

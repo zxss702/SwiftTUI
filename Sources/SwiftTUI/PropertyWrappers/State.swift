@@ -21,7 +21,7 @@ import Foundation
             guard let node = valueReference.node,
                   let label = valueReference.label
             else {
-                assertionFailure("Attempting to access @State variable before view is instantiated")
+                // 卸树后仍可能被 onHover 等异步路径读到；与 Binding 一致回退 initialValue。
                 return initialValue
             }
             if let value = node.state[label] {
@@ -43,7 +43,7 @@ import Foundation
         guard let node = valueReference.node,
               let label = valueReference.label
         else {
-            assertionFailure("Attempting to modify @State variable before view is instantiated")
+            // 导航卸树后悬停清除仍可能写入；静默忽略，勿 assertionFailure 崩进程。
             return
         }
         node.state[label] = newValue
@@ -77,10 +77,19 @@ import Foundation
             }
         )
     }
+
+    func seedInitialValueIfNeeded() {
+        guard let node = valueReference.node,
+              let label = valueReference.label,
+              node.state[label] == nil
+        else { return }
+        node.state[label] = initialValue
+    }
 }
 
 @MainActor protocol AnyState {
     var valueReference: StateReference { get }
+    func seedInitialValueIfNeeded()
 }
 
 @MainActor class StateReference {
