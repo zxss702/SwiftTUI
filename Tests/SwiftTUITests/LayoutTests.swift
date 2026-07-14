@@ -12,20 +12,20 @@ final class LayoutTests: XCTestCase {
         
         let node = Node(view: VStack(content: view).view)
         node.build()
-        let control = node.control!
+        let control = node.element!
         
-        // This is the VStackControl (root)
+        // This is the VStackElement (root)
         // Let's test its size calculation for a fixed terminal size (80x24)
         let size = control.size(proposedSize: Size(width: 80, height: 24))
         XCTAssertEqual(size.height.intValue, 24)
         
         control.layout(size: size)
         
-        let bgControl = control.children[0] // BackgroundControl
-        let borderControl = bgControl.children[0]
+        let bgElement = control.children[0] // BackgroundElement
+        let borderElement = bgElement.children[0]
         
-        XCTAssertEqual(bgControl.layer.frame.size.height.intValue, 24)
-        XCTAssertEqual(borderControl.layer.frame.size.height.intValue, 24)
+        XCTAssertEqual(bgElement.layer.frame.size.height.intValue, 24)
+        XCTAssertEqual(borderElement.layer.frame.size.height.intValue, 24)
     }
 
     @MainActor
@@ -52,20 +52,15 @@ final class LayoutTests: XCTestCase {
             }
         }
         let app = Application(rootView: ToDoListMock().padding().border().background(.blue))
-        app.updateWindowSize(size: Size(width: 80, height: 24))
-        app.window.controls[0].layout(size: Size(width: 80, height: 24))
-        
-        let bgControl = app.window.controls[0].children[0]
-        let borderControl = bgControl.children[0]
-        
-        XCTAssertEqual(borderControl.layer.frame.size.height.intValue, 24)
-        
-        // Find the text field and send \n
-        app.handleKeyInput(KeyEvent(character: "\n", keycode: 0, modifiers: [], type: .press))
-        
-        // Flush updates
-        try await app.update()
-        
-        XCTAssertEqual(borderControl.layer.frame.size.height.intValue, 24)
+        try await app.testing_prepare(size: Size(width: 80, height: 24))
+
+        let bgElement = app.window.elements[0].children[0]
+        let borderElement = bgElement.children[0]
+        XCTAssertEqual(borderElement.layer.frame.size.height.intValue, 24)
+
+        try await app.testing_turn(
+            input: .key(KeyEvent(character: "\n", keycode: 0, modifiers: [], type: .press))
+        )
+        XCTAssertEqual(borderElement.layer.frame.size.height.intValue, 24)
     }
 }

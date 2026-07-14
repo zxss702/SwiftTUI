@@ -15,9 +15,9 @@ import XCTest
         let control = try buildView(MyView())
 
         XCTAssertEqual(control.treeDescription, """
-            → VStackControl
-              → TextControl
-              → TextControl
+            → VStackElement
+              → TextElement
+              → TextElement
             """)
     }
 
@@ -37,8 +37,8 @@ import XCTest
         let control = try buildView(MyView())
 
         XCTAssertEqual(control.treeDescription, """
-            → VStackControl
-              → TextControl
+            → VStackElement
+              → TextElement
             """)
     }
 
@@ -57,24 +57,24 @@ import XCTest
 
         let node = Node(view: VStack(content: MyView()).view)
         node.build()
-        let root = try XCTUnwrap(node.control)
-        let geometryControl = try XCTUnwrap(root.children.first)
+        let root = try XCTUnwrap(node.element)
+        let geometryElement = try XCTUnwrap(root.children.first)
 
-        geometryControl.layout(size: Size(width: 20, height: 10))
-        let bigLeaf = deepestControl(geometryControl)
+        geometryElement.layout(size: Size(width: 20, height: 10))
+        let bigLeaf = deepestElement(geometryElement)
 
-        geometryControl.layout(size: Size(width: 5, height: 10))
-        let smallLeaf = deepestControl(geometryControl)
+        geometryElement.layout(size: Size(width: 5, height: 10))
+        let smallLeaf = deepestElement(geometryElement)
 
-        geometryControl.layout(size: Size(width: 40, height: 10))
-        let bigAgain = deepestControl(geometryControl)
+        geometryElement.layout(size: Size(width: 40, height: 10))
+        let bigAgain = deepestElement(geometryElement)
 
         // Branch switches recreate the leaf control in the same layout pass.
         XCTAssertTrue(bigLeaf !== smallLeaf)
         XCTAssertTrue(smallLeaf !== bigAgain)
     }
 
-    private func deepestControl(_ control: Control) -> Control {
+    private func deepestElement(_ control: Element) -> Element {
         var current = control
         while let child = current.children.first {
             current = child
@@ -82,10 +82,10 @@ import XCTest
         return current
     }
 
-    private func buildView<V: View>(_ view: V) throws -> Control {
+    private func buildView<V: View>(_ view: V) throws -> Element {
         let node = Node(view: VStack(content: view).view)
         node.build()
-        return try XCTUnwrap(node.control?.children.first)
+        return try XCTUnwrap(node.element?.children.first)
     }
 
 }

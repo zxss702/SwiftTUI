@@ -20,7 +20,7 @@ final class FocusStateTests: XCTestCase {
         }
 
         let app = Application(rootView: MyView())
-        let field = try XCTUnwrap(findTextField(in: app.window.controls.first))
+        let field = try XCTUnwrap(findTextField(in: app.window.elements.first))
 
         app.window.setFirstResponder(nil)
         XCTAssertFalse(field.isFirstResponder)
@@ -47,7 +47,7 @@ final class FocusStateTests: XCTestCase {
         }
 
         let app = Application(rootView: MyView())
-        let fields = collectTextFields(in: try XCTUnwrap(app.window.controls.first))
+        let fields = collectTextFields(in: try XCTUnwrap(app.window.elements.first))
         XCTAssertEqual(fields.count, 2)
 
         app.window.setFirstResponder(fields[0])
@@ -70,13 +70,13 @@ final class FocusStateTests: XCTestCase {
         }
 
         let app = Application(rootView: MyView())
-        let field = try XCTUnwrap(findTextField(in: app.window.controls.first))
+        let field = try XCTUnwrap(findTextField(in: app.window.elements.first))
         XCTAssertFalse(field.canReceiveFocus)
         app.window.setFirstResponder(field)
         XCTAssertNil(app.window.firstResponder)
     }
 
-    func test_focusSystemApply_focusesRegisteredControl() throws {
+    func test_focusSystemApply_focusesRegisteredElement() throws {
         struct MyView: View {
             @FocusState var focused: Bool
             @State var text = "hi"
@@ -88,7 +88,7 @@ final class FocusStateTests: XCTestCase {
         }
 
         let app = Application(rootView: MyView())
-        let field = try XCTUnwrap(findTextField(in: app.window.controls.first))
+        let field = try XCTUnwrap(findTextField(in: app.window.elements.first))
         let reg = try XCTUnwrap(field.focusRegistration)
 
         app.window.setFirstResponder(nil)
@@ -113,7 +113,7 @@ final class FocusStateTests: XCTestCase {
         }
 
         let app = Application(rootView: MyView())
-        let field = try XCTUnwrap(findTextField(in: app.window.controls.first))
+        let field = try XCTUnwrap(findTextField(in: app.window.elements.first))
         app.window.setFirstResponder(field)
         XCTAssertTrue(field.isFirstResponder)
 
@@ -123,9 +123,9 @@ final class FocusStateTests: XCTestCase {
 
     // MARK: - Helpers
 
-    private func findTextField(in control: Control?) -> Control? {
+    private func findTextField(in control: Element?) -> Element? {
         guard let control else { return nil }
-        if String(describing: type(of: control)).contains("TextFieldControl") {
+        if String(describing: type(of: control)).contains("TextFieldElement") {
             return control
         }
         for child in control.children {
@@ -134,9 +134,9 @@ final class FocusStateTests: XCTestCase {
         return nil
     }
 
-    private func collectTextFields(in control: Control) -> [Control] {
-        var result: [Control] = []
-        if String(describing: type(of: control)).contains("TextFieldControl") {
+    private func collectTextFields(in control: Element) -> [Element] {
+        var result: [Element] = []
+        if String(describing: type(of: control)).contains("TextFieldElement") {
             result.append(control)
         }
         for child in control.children {
