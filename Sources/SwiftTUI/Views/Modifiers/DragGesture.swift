@@ -56,41 +56,41 @@ private struct DragGestureModifier<Content: View>: View, PrimitiveView, Modifier
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            let control = control as! DragGestureControl
+        for control in node.elements?.values ?? [] {
+            let control = control as! DragGestureElement
             control.minimumDistance = gesture._minimumDistance
             control.onChanged = gesture._onChanged
             control.onEnded = gesture._onEnded
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? DragGestureControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? DragGestureElement {
             existing.minimumDistance = gesture._minimumDistance
             existing.onChanged = gesture._onChanged
             existing.onEnded = gesture._onEnded
             return existing
         }
-        let wrapper = DragGestureControl(
+        let wrapper = DragGestureElement(
             minimumDistance: gesture._minimumDistance,
             onChanged: gesture._onChanged,
             onEnded: gesture._onEnded
         )
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 }
 
 @MainActor
-private final class DragGestureControl: Control {
+private final class DragGestureElement: Element {
     var minimumDistance: Int
     var onChanged: ((DragGesture.Value) -> Void)?
     var onEnded: ((DragGesture.Value) -> Void)?
@@ -118,7 +118,7 @@ private final class DragGestureControl: Control {
         children[0].layout(size: size)
     }
 
-    override func hitTest(position: Position) -> Control? {
+    override func hitTest(position: Position) -> Element? {
         let local = position - layer.frame.position
         guard local.column >= 0, local.line >= 0,
               local.column < layer.frame.size.width,

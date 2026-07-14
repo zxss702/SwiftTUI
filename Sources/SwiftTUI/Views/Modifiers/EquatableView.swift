@@ -2,6 +2,9 @@ import Foundation
 
 public extension View where Self: Equatable {
     /// 内容等值时跳过子树 update（对齐 SwiftUI `equatable()`）。
+    ///
+    /// `Equatable` 必须覆盖所有会影响 Element 绘制/布局/交互的字段；
+    /// 漏掉的字段在 `==` 为 true 时不会推到 Element 树，表现为 stale UI。
     func equatable() -> some View {
         EquatableView(content: self)
     }

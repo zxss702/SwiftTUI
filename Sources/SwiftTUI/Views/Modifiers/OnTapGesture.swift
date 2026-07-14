@@ -15,37 +15,37 @@ private struct OnTapGestureModifier<Content: View>: View, PrimitiveView, Modifie
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            let control = control as! OnTapGestureControl
+        for control in node.elements?.values ?? [] {
+            let control = control as! OnTapGestureElement
             control.count = count
             control.action = action
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? OnTapGestureControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? OnTapGestureElement {
             existing.count = count
             existing.action = action
             return existing
         }
-        let wrapper = OnTapGestureControl(count: count, action: action)
+        let wrapper = OnTapGestureElement(count: count, action: action)
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 
-    private final class OnTapGestureControl: Control {
+    private final class OnTapGestureElement: Element {
         var count: Int
         var action: () -> Void
         private var taps = 0
-        private var resetWork: DispatchWorkItem?
+        private var resetWorkID: HostClock.WorkID?
 
         init(count: Int, action: @escaping () -> Void) {
             self.count = count
@@ -61,7 +61,7 @@ private struct OnTapGestureModifier<Content: View>: View, PrimitiveView, Modifie
             children[0].layout(size: size)
         }
 
-        override func hitTest(position: Position) -> Control? {
+        override func hitTest(position: Position) -> Element? {
             let local = position - layer.frame.position
             guard local.column >= 0, local.line >= 0,
                   local.column < layer.frame.size.width,
@@ -75,18 +75,33 @@ private struct OnTapGestureModifier<Content: View>: View, PrimitiveView, Modifie
         override func handleMouseEvent(_ event: MouseEvent) {
             if case .released(.left) = event.type {
                 taps += 1
-                resetWork?.cancel()
+                cancelReset()
                 if taps >= count {
                     taps = 0
                     action()
+                } else if let clock = layer.rootRenderer?.application?.clock {
+                    resetWorkID = clock.schedule(after: 0.3) { [weak self] in
+                        self?.taps = 0
+                        self?.resetWorkID = nil
+                    }
                 } else {
-                    let work = DispatchWorkItem { [weak self] in self?.taps = 0 }
-                    resetWork = work
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+                    taps = 0
                 }
             } else {
                 super.handleMouseEvent(event)
             }
+        }
+
+        private func cancelReset() {
+            if let id = resetWorkID {
+                layer.rootRenderer?.application?.clock.cancel(id)
+                resetWorkID = nil
+            }
+        }
+
+        override func willRemoveFromParent() {
+            cancelReset()
+            super.willRemoveFromParent()
         }
     }
 }

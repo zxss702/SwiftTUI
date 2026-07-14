@@ -44,33 +44,33 @@ private struct TaskModifier<Content: View>: View, PrimitiveView, ModifierView {
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            let control = control as! TaskControl
+        for control in node.elements?.values ?? [] {
+            let control = control as! TaskElement
             control.update(id: id, priority: priority, action: action)
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? TaskControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? TaskElement {
             existing.update(id: id, priority: priority, action: action)
             return existing
         }
-        let wrapper = TaskControl(id: id, priority: priority, action: action)
+        let wrapper = TaskElement(id: id, priority: priority, action: action)
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 }
 
 @MainActor
-private final class TaskControl: Control {
+private final class TaskElement: Element {
     private var currentID: AnyEquatable
     private var priority: TaskPriority
     private var action: @Sendable () async -> Void

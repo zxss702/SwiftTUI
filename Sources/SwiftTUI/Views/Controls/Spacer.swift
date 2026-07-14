@@ -9,17 +9,17 @@ import Foundation
     
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        node.control = SpacerControl(orientation: stackOrientation)
+        node.element = SpacerElement(orientation: stackOrientation)
     }
     
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
-        let control = node.control as! SpacerControl
+        let control = node.element as! SpacerElement
         control.orientation = stackOrientation
     }
     
-    private class SpacerControl: Control {
+    private class SpacerElement: Element {
         var orientation: StackOrientation
         
         init(orientation: StackOrientation) {

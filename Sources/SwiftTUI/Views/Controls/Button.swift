@@ -25,18 +25,21 @@ import Foundation
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.addNode(at: 0, Node(view: label.view))
-        let control = ButtonControl(action: action, hover: hover)
-        control.label = node.children[0].control(at: 0)
+        let control = ButtonElement(action: action, hover: hover)
+        control.label = node.children[0].element(at: 0)
         control.addSubview(control.label, at: 0)
         control.onActivate = makeOnActivate()
-        node.control = control
+        node.element = control
     }
 
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
         node.children[0].update(using: label.view)
-        let control = node.control as! ButtonControl
+        let control = node.element as! ButtonElement
+        let newLabel = node.children[0].element(at: 0)
+        control.label = newLabel
+        control.syncChild(newLabel)
         control.action = action
         control.hover = hover
         control.onActivate = makeOnActivate()
@@ -54,11 +57,11 @@ import Foundation
         }
     }
 
-    private class ButtonControl: Control {
+    private class ButtonElement: Element {
         var action: () -> Void
         var hover: () -> Void
         var onActivate: (() -> Void)?
-        var label: Control!
+        var label: Element!
         weak var buttonLayer: ButtonLayer?
 
         init(action: @escaping () -> Void, hover: @escaping () -> Void) {
@@ -117,14 +120,36 @@ import Foundation
 
         override func draw(into buffer: inout ScreenBuffer) {
             super.draw(into: &buffer)
-            if highlighted {
+            guard highlighted else { return }
+            // VT path: `buffer.cell(at:)` is always nil — swap fg/bg on the back buffer.
+            if let vt = buffer.vtRenderer {
+                let origin = buffer.translation
                 for y in 0 ..< frame.size.height.intValue {
                     for x in 0 ..< frame.size.width.intValue {
-                        let pos = Position(column: Extended(x), line: Extended(y))
-                        if var cell = buffer.cell(at: pos) {
-                            cell.attributes.inverted.toggle()
-                            buffer.setCell(cell, at: pos)
-                        }
+                        let abs = Position(
+                            column: Extended(x) + origin.column,
+                            line: Extended(y) + origin.line
+                        )
+                        let vtPos = VTPosition(row: abs.line.intValue + 1, column: abs.column.intValue + 1)
+                        let cell = vt.back[vtPos]
+                        vt.back[vtPos] = VTCell(
+                            character: cell.character,
+                            style: VTStyle(
+                                foreground: cell.style.background,
+                                background: cell.style.foreground,
+                                attributes: cell.style.attributes
+                            )
+                        )
+                    }
+                }
+                return
+            }
+            for y in 0 ..< frame.size.height.intValue {
+                for x in 0 ..< frame.size.width.intValue {
+                    let pos = Position(column: Extended(x), line: Extended(y))
+                    if var cell = buffer.cell(at: pos) {
+                        cell.attributes.inverted.toggle()
+                        buffer.setCell(cell, at: pos)
                     }
                 }
             }

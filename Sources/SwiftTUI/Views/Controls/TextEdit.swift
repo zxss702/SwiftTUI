@@ -109,13 +109,13 @@ private struct TextEditorCore: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        node.control = TextEditorControl(text: $text, isEnabled: isEnabled)
+        node.element = TextEditorElement(text: $text, isEnabled: isEnabled)
     }
 
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
-        let control = node.control as! TextEditorControl
+        let control = node.element as! TextEditorElement
         control.text = $text
         control.isEnabledFlag = isEnabled
         // External Binding changes only: local edits already rebuilt + invalidated.
@@ -127,7 +127,7 @@ private struct TextEditorCore: View, PrimitiveView {
 }
 
 @MainActor
-private final class TextEditorControl: Control {
+private final class TextEditorElement: Element {
     var text: Binding<String>
     var isEnabledFlag: Bool
 
@@ -138,6 +138,7 @@ private final class TextEditorControl: Control {
     private var lineRanges: [Range<String.Index>] = []
     private var needsRebuild = true
     private var lastBuiltWidth: Int = -1
+    private var bindingDirty = false
 
     init(text: Binding<String>, isEnabled: Bool) {
         self.text = text
@@ -146,9 +147,18 @@ private final class TextEditorControl: Control {
         self.cursorIndex = cachedText.endIndex
     }
 
+    override var needsBindingCommit: Bool { bindingDirty }
+
+    override func commitBindingIfNeeded() {
+        guard bindingDirty else { return }
+        bindingDirty = false
+        text.wrappedValue = cachedText
+    }
+
     /// Returns true when cached text was replaced from an external Binding write.
     @discardableResult
     func syncFromBinding() -> Bool {
+        if bindingDirty { return false }
         let newText = text.wrappedValue
         guard newText != cachedText else { return false }
         let distance = cachedText.distance(from: cachedText.startIndex, to: min(cursorIndex, cachedText.endIndex))
@@ -310,19 +320,14 @@ private final class TextEditorControl: Control {
         }
     }
 
-    private func commitText() {
-        // Local visual lines already match cachedText; Binding write refreshes ancestors
-        // without forcing a second rebuild in syncFromBinding.
-        text.wrappedValue = cachedText
-        layer.invalidate()
-    }
-
     private func applyTextMutation(_ mutate: () -> Void) {
         mutate()
         needsRebuild = true
         ensureVisualLines()
         scrollToKeepCursorVisible()
-        commitText()
+        bindingDirty = true
+        layer.invalidate()
+        layer.rootRenderer?.application?.noteEditorNeedsCommit(self)
     }
 
     override var cursorPosition: Position? {

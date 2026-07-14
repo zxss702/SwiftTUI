@@ -26,7 +26,7 @@ import Foundation
     static var size: Int? { 1 }
 
     func loadData(node: Node) {
-        let control = node.control as! LazyVGridControl
+        let control = node.element as! LazyVGridElement
         control.contentNode = node.children[0]
         control.totalChildrenSize = node.children[0].size
         control.rebuildSectionPlan()
@@ -35,7 +35,7 @@ import Foundation
 
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: content.view))
-        node.control = LazyVGridControl(
+        node.element = LazyVGridElement(
             columns: columns,
             alignment: alignment,
             spacing: spacing,
@@ -47,25 +47,27 @@ import Foundation
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        let control = node.control as! LazyVGridControl
+        let control = node.element as! LazyVGridElement
         control.columns = columns
         control.alignment = alignment
         control.spacing = spacing
         control.pinnedViews = pinnedViews
-        control.reloadContent(totalChildrenSize: node.children[0].size)
+        if control.reloadContent(totalChildrenSize: node.children[0].size) {
+            node.root.application?.requestLayout()
+        }
     }
 
-    func insertControl(at index: Int, node: Node) {
-        (node.control as! LazyVGridControl).handleInsert(at: index)
+    func insertElement(at index: Int, node: Node) {
+        (node.element as! LazyVGridElement).handleInsert(at: index)
     }
 
-    func removeControl(at index: Int, node: Node) {
-        (node.control as! LazyVGridControl).handleRemove(at: index)
+    func removeElement(at index: Int, node: Node) {
+        (node.element as! LazyVGridElement).handleRemove(at: index)
     }
 
-    // MARK: - Control
+    // MARK: - Element
 
-    private class LazyVGridControl: Control, LazyControl {
+    private class LazyVGridElement: Element, LazyElement {
         var columns: [GridItem]
         var alignment: HorizontalAlignment
         var spacing: Extended?
@@ -83,7 +85,7 @@ import Foundation
         private var lastForcedChrome: Set<Int> = []
         private var lastCalculatedWidth: Extended = -1
 
-        private var loadedControls: [Int: Control] = [:]
+        private var loadedElements: [Int: Element] = [:]
         private var calculatedColumns: [(width: Extended, xOffset: Extended, alignment: Alignment?)] = []
 
         /// Per flat-index kind derived from Section nodes.
@@ -120,7 +122,7 @@ import Foundation
         }
 
         func clearCache() {
-            unloadAllLoadedControls()
+            unloadAllLoadedElements()
             lastStartIndex = nil
             lastEndIndex = nil
             lastForcedChrome = []
@@ -131,20 +133,24 @@ import Foundation
             contentHeight = 0
         }
 
-        func reloadContent(totalChildrenSize: Int) {
+        @discardableResult
+        func reloadContent(totalChildrenSize: Int) -> Bool {
             self.totalChildrenSize = totalChildrenSize
+            var remounted = false
             var toRemove: [Int] = []
-            for (i, _) in loadedControls where i >= totalChildrenSize {
+            for (i, _) in loadedElements where i >= totalChildrenSize {
                 toRemove.append(i)
             }
             for i in toRemove {
-                unloadControl(at: i)
+                unloadElement(at: i)
+                remounted = true
             }
             if let contentNode {
-                for (i, ctrl) in loadedControls {
-                    let expected = contentNode.control(at: i)
+                for (i, ctrl) in loadedElements {
+                    let expected = contentNode.element(at: i)
                     if ctrl !== expected {
-                        unloadControl(at: i)
+                        unloadElement(at: i)
+                        remounted = true
                     }
                 }
             }
@@ -153,13 +159,14 @@ import Foundation
             lastForcedChrome = []
             rebuildSectionPlan()
             updateVisibleRegion(offset: lastOffset, height: lastHeight)
+            return remounted
         }
 
         func handleInsert(at index: Int) {
             totalChildrenSize += 1
-            for key in loadedControls.keys.filter({ $0 >= index }).sorted(by: >) {
-                if let ctrl = loadedControls.removeValue(forKey: key) {
-                    loadedControls[key + 1] = ctrl
+            for key in loadedElements.keys.filter({ $0 >= index }).sorted(by: >) {
+                if let ctrl = loadedElements.removeValue(forKey: key) {
+                    loadedElements[key + 1] = ctrl
                 }
             }
             lastStartIndex = nil
@@ -169,10 +176,10 @@ import Foundation
 
         func handleRemove(at index: Int) {
             totalChildrenSize = max(0, totalChildrenSize - 1)
-            unloadControl(at: index)
-            for key in loadedControls.keys.filter({ $0 > index }).sorted() {
-                if let ctrl = loadedControls.removeValue(forKey: key) {
-                    loadedControls[key - 1] = ctrl
+            unloadElement(at: index)
+            for key in loadedElements.keys.filter({ $0 > index }).sorted() {
+                if let ctrl = loadedElements.removeValue(forKey: key) {
+                    loadedElements[key - 1] = ctrl
                 }
             }
             lastStartIndex = nil
@@ -180,18 +187,18 @@ import Foundation
             lastForcedChrome = []
         }
 
-        private func unloadAllLoadedControls() {
-            for i in Array(loadedControls.keys) {
-                unloadControl(at: i)
+        private func unloadAllLoadedElements() {
+            for i in Array(loadedElements.keys) {
+                unloadElement(at: i)
             }
         }
 
-        private func unloadControl(at index: Int) {
-            if let ctrl = loadedControls[index],
+        private func unloadElement(at index: Int) {
+            if let ctrl = loadedElements[index],
                let idx = children.firstIndex(where: { $0 === ctrl }) {
                 removeSubview(at: idx)
             }
-            loadedControls.removeValue(forKey: index)
+            loadedElements.removeValue(forKey: index)
         }
 
         // MARK: Section plan
@@ -232,7 +239,7 @@ import Foundation
             }
 
             // Leaf / layout root with its own control → one cell
-            if node.control != nil {
+            if node.element != nil {
                 kinds.append(.cell)
                 return
             }
@@ -442,27 +449,27 @@ import Foundation
             needed.formUnion(forcedChrome)
 
             var toRemove: [Int] = []
-            for (i, _) in loadedControls where !needed.contains(i) {
+            for (i, _) in loadedElements where !needed.contains(i) {
                 toRemove.append(i)
             }
             for i in toRemove {
-                unloadControl(at: i)
+                unloadElement(at: i)
             }
 
             for i in needed.sorted() {
-                if loadedControls[i] == nil {
-                    let control = contentNode.control(at: i)
+                if loadedElements[i] == nil {
+                    let control = contentNode.element(at: i)
                     if control.parent == nil {
-                        loadedControls[i] = control
+                        loadedElements[i] = control
                         addSubview(control, at: children.count)
                     } else if control.parent === self {
-                        loadedControls[i] = control
+                        loadedElements[i] = control
                     } else {
                         if let oldParent = control.parent,
                            let idx = oldParent.children.firstIndex(where: { $0 === control }) {
                             oldParent.removeSubview(at: idx)
                         }
-                        loadedControls[i] = control
+                        loadedElements[i] = control
                         addSubview(control, at: children.count)
                     }
                 }
@@ -573,7 +580,7 @@ import Foundation
             // move pinned chrome to end of children for paint order).
             var chromeIndices: [Int] = []
 
-            for (index, control) in loadedControls {
+            for (index, control) in loadedElements {
                 let kind = itemKinds.indices.contains(index) ? itemKinds[index] : .cell
                 let y = pinnedY(for: index, kind: kind, viewportTop: viewportTop, viewportBottom: viewportBottom)
 
@@ -616,7 +623,7 @@ import Foundation
 
             // Raise pinned chrome in subview order so they draw above cells.
             for index in chromeIndices {
-                guard let control = loadedControls[index],
+                guard let control = loadedElements[index],
                       let idx = children.firstIndex(where: { $0 === control }) else { continue }
                 if idx != children.count - 1 {
                     removeSubview(at: idx)

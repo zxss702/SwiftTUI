@@ -3,7 +3,7 @@ import Foundation
 // MARK: - View.id
 
 @MainActor
-final class IdentityAnchorControl: Control {
+final class IdentityAnchorElement: Element {
     var id: AnyHashable
 
     init(id: AnyHashable) {
@@ -28,26 +28,26 @@ private struct IdentityAnchor<Content: View>: View, PrimitiveView, ModifierView 
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as! IdentityAnchorControl).id = id
+        for control in node.elements?.values ?? [] {
+            (control as! IdentityAnchorElement).id = id
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? IdentityAnchorControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? IdentityAnchorElement {
             existing.id = id
             return existing
         }
-        let wrapper = IdentityAnchorControl(id: id)
+        let wrapper = IdentityAnchorElement(id: id)
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 }
@@ -96,44 +96,46 @@ private struct ScrollViewReaderHost<Content: View>: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         let proxy = ScrollViewProxy()
-        node.state["proxy"] = proxy
+        node.storage["proxy"] = proxy
         node.addNode(at: 0, Node(view: content(proxy).view))
-        let control = ScrollViewReaderControl()
+        let control = ScrollViewReaderElement()
         control.proxy = proxy
         proxy.bridge = control
-        control.contentControl = node.children[0].control(at: 0)
-        control.addSubview(control.contentControl, at: 0)
-        node.control = control
+        control.contentElement = node.children[0].element(at: 0)
+        control.addSubview(control.contentElement, at: 0)
+        node.element = control
     }
 
     func updateNode(_ node: Node) {
         node.view = self
-        let proxy = (node.state["proxy"] as? ScrollViewProxy) ?? ScrollViewProxy()
-        node.state["proxy"] = proxy
+        let proxy = (node.storage["proxy"] as? ScrollViewProxy) ?? ScrollViewProxy()
+        node.storage["proxy"] = proxy
         node.children[0].update(using: content(proxy).view)
-        let control = node.control as! ScrollViewReaderControl
+        let control = node.element as! ScrollViewReaderElement
         control.proxy = proxy
         proxy.bridge = control
-        control.contentControl = node.children[0].control(at: 0)
+        let newContent = node.children[0].element(at: 0)
+        control.contentElement = newContent
+        control.syncChild(newContent)
     }
 }
 
 @MainActor
-private final class ScrollViewReaderControl: Control, ScrollToIdentityBridging {
+private final class ScrollViewReaderElement: Element, ScrollToIdentityBridging {
     var proxy: ScrollViewProxy!
-    var contentControl: Control!
+    var contentElement: Element!
 
     override func size(proposedSize: Size) -> Size {
-        contentControl.size(proposedSize: proposedSize)
+        contentElement.size(proposedSize: proposedSize)
     }
 
     override func layout(size: Size) {
         super.layout(size: size)
-        contentControl.layout(size: size)
+        contentElement.layout(size: size)
     }
 
     func scrollToIdentity(_ id: AnyHashable) {
-        guard let target = findIdentity(id, in: contentControl) else { return }
+        guard let target = findIdentity(id, in: contentElement) else { return }
         if let scroll = findScrollAncestor(of: target) {
             scroll.scrollToIdentity(id)
         } else {
@@ -142,8 +144,8 @@ private final class ScrollViewReaderControl: Control, ScrollToIdentityBridging {
         }
     }
 
-    private func findIdentity(_ id: AnyHashable, in control: Control) -> IdentityAnchorControl? {
-        if let anchor = control as? IdentityAnchorControl, anchor.id == id {
+    private func findIdentity(_ id: AnyHashable, in control: Element) -> IdentityAnchorElement? {
+        if let anchor = control as? IdentityAnchorElement, anchor.id == id {
             return anchor
         }
         for child in control.children {
@@ -152,20 +154,20 @@ private final class ScrollViewReaderControl: Control, ScrollToIdentityBridging {
         return nil
     }
 
-    private func findScrollAncestor(of control: Control) -> ScrollToIdentityBridging? {
-        var current: Control? = control
+    private func findScrollAncestor(of control: Element) -> ScrollToIdentityBridging? {
+        var current: Element? = control
         while let c = current {
-            if let scroll = c as? ScrollToIdentityBridging, !(scroll is ScrollViewReaderControl) {
+            if let scroll = c as? ScrollToIdentityBridging, !(scroll is ScrollViewReaderElement) {
                 return scroll
             }
             current = c.parent
         }
         // 也在子树里找 ScrollView（reader 包在外面时）
-        return findScrollDescendant(in: contentControl)
+        return findScrollDescendant(in: contentElement)
     }
 
-    private func findScrollDescendant(in control: Control) -> ScrollToIdentityBridging? {
-        if let scroll = control as? ScrollToIdentityBridging, !(scroll is ScrollViewReaderControl) {
+    private func findScrollDescendant(in control: Element) -> ScrollToIdentityBridging? {
+        if let scroll = control as? ScrollToIdentityBridging, !(scroll is ScrollViewReaderElement) {
             return scroll
         }
         for child in control.children {

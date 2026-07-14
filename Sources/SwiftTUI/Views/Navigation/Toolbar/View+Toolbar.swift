@@ -14,29 +14,36 @@ public extension View {
 // MARK: - Modifier
 
 @MainActor
-private struct ToolbarModifierView<Content: View, Toolbar: ToolbarContent>: View {
+private struct ToolbarModifierView<Content: View, Toolbar: ToolbarContent>: View, PrimitiveView {
     let toolbar: Toolbar
     let content: Content
 
-    @Environment(NavigationContext.self) private var context
-    @State private var boundPageID: AnyHashable?
+    static var size: Int? { Content.size }
 
-    var body: some View {
-        let _ = registerToolbar()
-        content
-            .onAppear {
-                if boundPageID == nil {
-                    boundPageID = context.currentPageID
-                }
-            }
+    func buildNode(_ node: Node) {
+        node.addNode(at: 0, Node(view: content.view))
+        registerToolbar(on: node)
     }
 
-    private func registerToolbar() {
-        let pageID = boundPageID ?? context.currentPageID
-        guard pageID == context.currentPageID else { return }
+    func updateNode(_ node: Node) {
+        node.view = self
+        node.children[0].update(using: content.view)
+        registerToolbar(on: node)
+    }
+
+    private func registerToolbar(on node: Node) {
+        guard let context = node.resolvedEnvironment()[NavigationContext.self] else { return }
+        let boundPageKey = "navigation.boundPageID"
+        // Bind once to the page that first mounted this modifier — never reuse `@State` slots.
+        if node.storage[boundPageKey] == nil {
+            node.storage[boundPageKey] = context.currentPageID
+        }
+        guard let bound = node.storage[boundPageKey] as? AnyHashable else { return }
+        // Keep-alive pages stay mounted; only the top page may publish chrome.
+        guard bound == context.currentPageID else { return }
 
         var storage = NavigationToolbarContent.empty
         (toolbar as? any _ToolbarContentCollectable)?.collect(into: &storage)
-        context.setToolbar(storage, for: pageID)
+        context.setToolbar(storage, for: bound)
     }
 }

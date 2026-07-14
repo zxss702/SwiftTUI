@@ -47,27 +47,27 @@ private struct FocusedBoolModifier<Content: View>: View, PrimitiveView, Modifier
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as? FocusHostControl)?.installBool(binding)
+        for control in node.elements?.values ?? [] {
+            (control as? FocusHostElement)?.installBool(binding)
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let host = control.parent as? FocusHostControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let host = control.parent as? FocusHostElement {
             host.installBool(binding)
             return host
         }
-        let host = FocusHostControl()
+        let host = FocusHostElement()
         host.addSubview(control, at: 0)
         host.installBool(binding)
-        node.controls?.add(host)
+        node.elements?.add(host)
         return host
     }
 }
@@ -83,27 +83,27 @@ private struct FocusedEqualsModifier<Content: View, Value: Hashable>: View, Prim
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as? FocusHostControl)?.installEquals(binding, equals: equals)
+        for control in node.elements?.values ?? [] {
+            (control as? FocusHostElement)?.installEquals(binding, equals: equals)
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let host = control.parent as? FocusHostControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let host = control.parent as? FocusHostElement {
             host.installEquals(binding, equals: equals)
             return host
         }
-        let host = FocusHostControl()
+        let host = FocusHostElement()
         host.addSubview(control, at: 0)
         host.installEquals(binding, equals: equals)
-        node.controls?.add(host)
+        node.elements?.add(host)
         return host
     }
 }
@@ -111,7 +111,7 @@ private struct FocusedEqualsModifier<Content: View, Value: Hashable>: View, Prim
 // MARK: - Focus host
 
 @MainActor
-private final class FocusHostControl: Control {
+private final class FocusHostElement: Element {
     private var registration: FocusRegistration?
 
     func installBool(_ binding: FocusState<Bool>.Binding) {
@@ -141,8 +141,8 @@ private final class FocusHostControl: Control {
     ) {
         if let registration {
             FocusSystem.unregister(registration)
-            if registration.control?.focusRegistration === registration {
-                registration.control?.focusRegistration = nil
+            if registration.element?.focusRegistration === registration {
+                registration.element?.focusRegistration = nil
             }
         }
         guard let target else { return }
@@ -158,7 +158,7 @@ private final class FocusHostControl: Control {
         FocusSystem.register(registration)
     }
 
-    private var target: Control? {
+    private var target: Element? {
         children.first?.firstSelectableElement ?? children.first
     }
 
@@ -173,15 +173,15 @@ private final class FocusHostControl: Control {
 
     override var selectable: Bool { false }
 
-    override var firstSelectableElement: Control? {
+    override var firstSelectableElement: Element? {
         children.first?.firstSelectableElement
     }
 
     override func willRemoveFromParent() {
         if let registration {
             FocusSystem.unregister(registration)
-            if registration.control?.focusRegistration === registration {
-                registration.control?.focusRegistration = nil
+            if registration.element?.focusRegistration === registration {
+                registration.element?.focusRegistration = nil
             }
             self.registration = nil
         }
@@ -201,32 +201,32 @@ private struct DefaultFocusModifier<Content: View, Value: Hashable>: View, Primi
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as? DefaultFocusControl<Value>)?.configure(binding: binding, value: value)
+        for control in node.elements?.values ?? [] {
+            (control as? DefaultFocusElement<Value>)?.configure(binding: binding, value: value)
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let host = control.parent as? DefaultFocusControl<Value> {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let host = control.parent as? DefaultFocusElement<Value> {
             host.configure(binding: binding, value: value)
             return host
         }
-        let host = DefaultFocusControl(binding: binding, value: value)
+        let host = DefaultFocusElement(binding: binding, value: value)
         host.addSubview(control, at: 0)
-        node.controls?.add(host)
+        node.elements?.add(host)
         return host
     }
 }
 
 @MainActor
-private final class DefaultFocusControl<Value: Hashable>: Control {
+private final class DefaultFocusElement<Value: Hashable>: Element {
     private var binding: FocusState<Value>.Binding
     private var value: Value
     private var didApply = false
@@ -252,16 +252,24 @@ private final class DefaultFocusControl<Value: Hashable>: Control {
         didApply = true
         let binding = self.binding
         let value = self.value
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let window = self.root.window
+        // Next host turn so the tree finishes this layout before stealing focus.
+        if let clock = layer.rootRenderer?.application?.clock {
+            clock.scheduleNextTurn { [weak self] in
+                guard let self else { return }
+                let window = self.root.window
+                if window?.firstResponder == nil || window?.firstResponder?.canReceiveFocus != true {
+                    binding.wrappedValue = value
+                }
+            }
+        } else {
+            let window = root.window
             if window?.firstResponder == nil || window?.firstResponder?.canReceiveFocus != true {
                 binding.wrappedValue = value
             }
         }
     }
 
-    override var firstSelectableElement: Control? {
+    override var firstSelectableElement: Element? {
         children.first?.firstSelectableElement
     }
 }
@@ -276,35 +284,35 @@ private struct FocusableModifier<Content: View>: View, PrimitiveView, ModifierVi
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as? FocusableControl)?.isFocusable = isFocusable
-            (control as? FocusableControl)?.applyFlag()
+        for control in node.elements?.values ?? [] {
+            (control as? FocusableElement)?.isFocusable = isFocusable
+            (control as? FocusableElement)?.applyFlag()
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let host = control.parent as? FocusableControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let host = control.parent as? FocusableElement {
             host.isFocusable = isFocusable
             host.applyFlag()
             return host
         }
-        let host = FocusableControl(isFocusable: isFocusable)
+        let host = FocusableElement(isFocusable: isFocusable)
         host.addSubview(control, at: 0)
         host.applyFlag()
-        node.controls?.add(host)
+        node.elements?.add(host)
         return host
     }
 }
 
 @MainActor
-private final class FocusableControl: Control {
+private final class FocusableElement: Element {
     var isFocusable: Bool
 
     init(isFocusable: Bool) {
@@ -328,7 +336,7 @@ private final class FocusableControl: Control {
         children.first?.layout(size: size)
     }
 
-    override var firstSelectableElement: Control? {
+    override var firstSelectableElement: Element? {
         guard isFocusable else { return nil }
         return children.first?.firstSelectableElement
     }

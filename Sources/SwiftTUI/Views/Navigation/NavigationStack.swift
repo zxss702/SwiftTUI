@@ -53,8 +53,7 @@ private struct NavigationContainer<Root: View>: View {
         let _ = context.installPathSync(pathSync)
 
         VStack(alignment: .leading, spacing: 0) {
-            // 工具栏单独成 View，title 变化只刷新栏，避免整页重建闪烁
-            NavigationBar(context: context, navigateBack: navigateBack)
+            NavigationBar(navigateBack: navigateBack, context: context)
 
             NavigationPage(root: root, context: context)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -73,23 +72,32 @@ private struct NavigationContainer<Root: View>: View {
 
 // MARK: - Bar
 
+/// Observes `NavigationContext.toolbarEpoch` / titles so chrome updates without
+/// invalidating the whole stack (which would re-run page body → setToolbar → loop).
 @MainActor
 private struct NavigationBar: View {
-    let context: NavigationContext
     let navigateBack: () -> Void
+    let context: NavigationContext
 
     var body: some View {
-        let toolbar = context.currentToolbar
+        // Read observable fields so chrome refreshes without `@Environment`
+        // (avoids escaping-closure / weak-node traps).
+        let _ = context.toolbarEpoch
+        let _ = context.stack
+        let toolbar = context.toolbar(for: context.currentPageID)
+        let title = context.currentTitle
+        let canPop = context.canPop
+        let backLabel = context.backButtonLabel
 
         HStack(spacing: 1) {
-            if context.canPop {
-                Button(context.backButtonLabel, action: navigateBack)
+            if canPop {
+                Button(backLabel, action: navigateBack)
             }
             if let leading = toolbar.leading {
                 leading
             }
 
-            middle(toolbar: toolbar)
+            middle(toolbar: toolbar, title: title)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             if let trailing = toolbar.trailing {
@@ -101,36 +109,48 @@ private struct NavigationBar: View {
     }
 
     @ViewBuilder
-    private func middle(toolbar: NavigationToolbarContent) -> some View {
+    private func middle(toolbar: NavigationToolbarContent, title: String) -> some View {
         if let principal = toolbar.principal {
             principal
         } else {
-            Text(context.currentTitle)
+            Text(title)
                 .bold()
                 .lineLimit(1)
         }
     }
 }
 
-// MARK: - Page
+// MARK: - Page (keep-alive stack)
 
-/// 只挂载当前可见页（根或栈顶），与 SwiftUI NavigationStack 的展示模型一致：
-/// path 驱动内容；源页不必为了 item 同步而常驻隐藏树。
+/// Keeps root + every pushed page mounted. Only the top page is visible and
+/// hit-testable; lower pages stay in the view graph so `@State` survives push/pop.
 @MainActor
 private struct NavigationPage<Root: View>: View {
     let root: Root
     let context: NavigationContext
 
     var body: some View {
-        if context.canPop,
-           let topValue = context.stack.last,
-           let destination = context.destinationView(for: topValue)
-        {
-            destination
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
+        let stack = context.stack
+
+        ZStack {
             root
+                .hidden(!stack.isEmpty)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            ForEach(stack, id: \.self) { value in
+                pageView(for: value)
+                    .hidden(stack.last.map { $0 != value } ?? true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func pageView(for value: AnyHashable) -> some View {
+        if let destination = context.destinationView(for: value) {
+            destination
+        } else {
+            EmptyView()
         }
     }
 }

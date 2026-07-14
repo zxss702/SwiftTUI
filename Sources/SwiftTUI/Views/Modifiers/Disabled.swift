@@ -28,7 +28,7 @@ private struct DisabledModifier<Content: View>: View, PrimitiveView, ModifierVie
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
         if disabled {
             node.environment = { $0.isEnabled = false }
@@ -39,25 +39,25 @@ private struct DisabledModifier<Content: View>: View, PrimitiveView, ModifierVie
         node.view = self
         node.environment = disabled ? { $0.isEnabled = false } : nil
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            let control = control as! DisabledControl
+        for control in node.elements?.values ?? [] {
+            let control = control as! DisabledElement
             control.isDisabled = disabled
             control.layer.invalidate()
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? DisabledControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? DisabledElement {
             existing.isDisabled = disabled
             return existing
         }
-        let wrapper = DisabledControl(isDisabled: disabled)
+        let wrapper = DisabledElement(isDisabled: disabled)
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 
-    private final class DisabledControl: Control {
+    private final class DisabledElement: Element {
         var isDisabled: Bool
 
         init(isDisabled: Bool) {
@@ -73,7 +73,7 @@ private struct DisabledModifier<Content: View>: View, PrimitiveView, ModifierVie
             children[0].layout(size: size)
         }
 
-        override func hitTest(position: Position) -> Control? {
+        override func hitTest(position: Position) -> Element? {
             guard isDisabled else {
                 return super.hitTest(position: position)
             }
@@ -102,7 +102,7 @@ private struct DisabledModifier<Content: View>: View, PrimitiveView, ModifierVie
             super.handleMouseEvent(event)
         }
 
-        override var firstSelectableElement: Control? {
+        override var firstSelectableElement: Element? {
             isDisabled ? nil : super.firstSelectableElement
         }
 

@@ -101,7 +101,7 @@ extension EnvironmentValues {
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
 
-        node.control = DividerControl(
+        node.element = DividerElement(
           orientation: stackOrientation,
           color: foregroundColor,
           style: style
@@ -112,12 +112,19 @@ extension EnvironmentValues {
         setupEnvironmentProperties(node: node)
         node.view = self
 
-        let control = node.control as! DividerControl
+        let control = node.element as! DividerElement
+        let styleChanged = control.style != style
+            || control.orientation != stackOrientation
+            || control.color != foregroundColor
         control.orientation = stackOrientation
         control.color = foregroundColor
+        control.style = style
+        if styleChanged {
+            control.layer.invalidate()
+        }
     }
     
-    private class DividerControl: Control {
+    private class DividerElement: Element {
         var orientation: StackOrientation
         var color: Color
         var style: DividerStyle

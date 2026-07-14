@@ -12,35 +12,41 @@ import Foundation
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
+        setupEnvironmentProperties(node: node)
         node.addNode(at: 0, Node(view: content.view))
-        let control = ScrollControl()
-        control.contentControl = node.children[0].control(at: 0)
-        control.addSubview(control.contentControl, at: 0)
-        node.control = control
+        let control = ScrollElement()
+        control.contentElement = node.children[0].element(at: 0)
+        control.addSubview(control.contentElement, at: 0)
+        node.element = control
     }
 
     func updateNode(_ node: Node) {
+        setupEnvironmentProperties(node: node)
         node.view = self
         node.children[0].update(using: content.view)
+        let control = node.element as! ScrollElement
+        let newContent = node.children[0].element(at: 0)
+        control.contentElement = newContent
+        control.syncChild(newContent)
     }
 
-    private class ScrollControl: Control, ScrollToIdentityBridging {
-        var contentControl: Control!
+    private class ScrollElement: Element, ScrollToIdentityBridging {
+        var contentElement: Element!
         /// Cached content size from the last full layout; used to clamp scroll without re-measuring.
         var cachedContentSize: Size = .zero
         var contentOffset: Extended = 0
 
         func scrollToIdentity(_ id: AnyHashable) {
-            guard let target = findIdentity(id, in: contentControl) else { return }
+            guard let target = findIdentity(id, in: contentElement) else { return }
             let absolute = target.absoluteFrame.position.line
-            let contentOrigin = contentControl.absoluteFrame.position.line
+            let contentOrigin = contentElement.absoluteFrame.position.line
             let destination = absolute - contentOrigin
             contentOffset = destination
             applyScrollOffset()
         }
 
-        private func findIdentity(_ id: AnyHashable, in control: Control) -> IdentityAnchorControl? {
-            if let anchor = control as? IdentityAnchorControl, anchor.id == id {
+        private func findIdentity(_ id: AnyHashable, in control: Element) -> IdentityAnchorElement? {
+            if let anchor = control as? IdentityAnchorElement, anchor.id == id {
                 return anchor
             }
             for child in control.children {
@@ -51,7 +57,7 @@ import Foundation
 
         /// 默认占满全部高度，顶部对齐（对齐 SwiftUI）。
         override func size(proposedSize: Size) -> Size {
-            let contentSize = contentControl.size(
+            let contentSize = contentElement.size(
                 proposedSize: Size(width: proposedSize.width, height: .infinity)
             )
             let height: Extended
@@ -71,31 +77,31 @@ import Foundation
 
         override func layout(size: Size) {
             super.layout(size: size)
-            var contentSize = contentControl.size(proposedSize: Size(width: size.width, height: .infinity))
+            var contentSize = contentElement.size(proposedSize: Size(width: size.width, height: .infinity))
             // Viewport or content height may have changed (e.g. window resize);
             // re-clamp so a previous "scrolled to bottom" offset does not leave
             // the bottom content floating in the middle of a taller viewport.
             var maxOffset = max(Extended(0), contentSize.height - size.height)
             contentOffset = min(max(Extended(0), contentOffset), maxOffset)
-            contentControl.updateVisibleRegion(offset: contentOffset, height: size.height)
-            contentControl.layout(size: contentSize)
+            contentElement.updateVisibleRegion(offset: contentOffset, height: size.height)
+            contentElement.layout(size: contentSize)
 
             // Lazy stacks measure real row heights during layout; content size may grow.
             // Refine once so ScrollView's scroll range matches wrapped multi-line rows.
-            let refined = contentControl.size(proposedSize: Size(width: size.width, height: .infinity))
+            let refined = contentElement.size(proposedSize: Size(width: size.width, height: .infinity))
             if refined.height != contentSize.height || refined.width != contentSize.width {
                 contentSize = refined
                 maxOffset = max(Extended(0), contentSize.height - size.height)
                 contentOffset = min(max(Extended(0), contentOffset), maxOffset)
-                contentControl.updateVisibleRegion(offset: contentOffset, height: size.height)
-                contentControl.layout(size: contentSize)
+                contentElement.updateVisibleRegion(offset: contentOffset, height: size.height)
+                contentElement.layout(size: contentSize)
             }
             cachedContentSize = contentSize
             applyContentOffset(invalidateLayer: true)
         }
 
         override func scroll(to position: Position) {
-            let destination = position.line - contentControl.layer.frame.position.line
+            let destination = position.line - contentElement.layer.frame.position.line
             guard layer.frame.size.height > 0 else { return }
             let previous = contentOffset
             if contentOffset > destination {
@@ -123,21 +129,21 @@ import Foundation
             let maxOffset = max(Extended(0), cachedContentSize.height - viewportHeight)
             contentOffset = min(max(Extended(0), contentOffset), maxOffset)
 
-            let lazyNeedsLayout = contentControl.updateVisibleRegion(
+            let lazyNeedsLayout = contentElement.updateVisibleRegion(
                 offset: contentOffset,
                 height: viewportHeight
             )
             if lazyNeedsLayout {
-                contentControl.layout(size: cachedContentSize)
-                let refined = contentControl.size(
+                contentElement.layout(size: cachedContentSize)
+                let refined = contentElement.size(
                     proposedSize: Size(width: layer.frame.size.width, height: .infinity)
                 )
                 if refined.height != cachedContentSize.height || refined.width != cachedContentSize.width {
                     cachedContentSize = refined
                     let refinedMax = max(Extended(0), cachedContentSize.height - viewportHeight)
                     contentOffset = min(max(Extended(0), contentOffset), refinedMax)
-                    contentControl.updateVisibleRegion(offset: contentOffset, height: viewportHeight)
-                    contentControl.layout(size: cachedContentSize)
+                    contentElement.updateVisibleRegion(offset: contentOffset, height: viewportHeight)
+                    contentElement.layout(size: cachedContentSize)
                 }
             }
 
@@ -146,9 +152,9 @@ import Foundation
         }
 
         private func applyContentOffset(invalidateLayer: Bool) {
-            var contentFrame = contentControl.layer.frame
+            var contentFrame = contentElement.layer.frame
             contentFrame.position.line = -contentOffset
-            contentControl.layer.setFrame(contentFrame, invalidate: invalidateLayer)
+            contentElement.layer.setFrame(contentFrame, invalidate: invalidateLayer)
         }
     }
 }

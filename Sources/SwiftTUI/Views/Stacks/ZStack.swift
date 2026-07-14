@@ -19,35 +19,36 @@ import Foundation
     
     func loadData(node: Node) {
         for i in 0 ..< node.children[0].size {
-            (node.control as! ZStackControl).addSubview(node.children[0].control(at: i), at: i)
+            (node.element as! ZStackElement).addSubview(node.children[0].element(at: i), at: i)
         }
     }
     
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: content.view))
-        node.control = ZStackControl(alignment: alignment)
+        node.element = ZStackElement(alignment: alignment)
     }
     
     func updateNode(_ node: Node) {
         let previous = node.view as? Self
         node.view = self
         node.children[0].update(using: content.view)
-        let control = node.control as! ZStackControl
+        let control = node.element as! ZStackElement
         if previous?.alignment != alignment {
             node.root.application?.requestLayout()
         }
         control.alignment = alignment
+        control.reconcileChildren(from: node.children[0])
     }
     
-    func insertControl(at index: Int, node: Node) {
-        (node.control as! ZStackControl).addSubview(node.children[0].control(at: index), at: index)
+    func insertElement(at index: Int, node: Node) {
+        (node.element as! ZStackElement).addSubview(node.children[0].element(at: index), at: index)
     }
     
-    func removeControl(at index: Int, node: Node) {
-        (node.control as! ZStackControl).removeSubview(at: index)
+    func removeElement(at index: Int, node: Node) {
+        (node.element as! ZStackElement).removeSubview(at: index)
     }
     
-    private class ZStackControl: Control {
+    private class ZStackElement: Element {
         var alignment: Alignment
         
         init(alignment: Alignment) {
@@ -72,16 +73,49 @@ import Foundation
                 control.layout(size: childSize)
             }
             for control in children {
-                switch alignment.horizontalAlignment {
-                case .leading: control.layer.frame.position.column = 0
-                case .center: control.layer.frame.position.column = (size.width - control.layer.frame.size.width) / 2
-                case .trailing: control.layer.frame.position.column = size.width - control.layer.frame.size.width
-                }
-                switch alignment.verticalAlignment {
-                case .top: control.layer.frame.position.line = 0
-                case .center: control.layer.frame.position.line = (size.height - control.layer.frame.size.height) / 2
-                case .bottom: control.layer.frame.position.line = size.height - control.layer.frame.size.height
-                }
+                let child = control.layer.frame.size
+                control.layer.frame.position.column = Self.alignedOffset(
+                    container: size.width,
+                    child: child.width,
+                    horizontal: alignment.horizontalAlignment
+                )
+                control.layer.frame.position.line = Self.alignedOffset(
+                    container: size.height,
+                    child: child.height,
+                    vertical: alignment.verticalAlignment
+                )
+            }
+        }
+
+        private static func alignedOffset(
+            container: Extended,
+            child: Extended,
+            horizontal: HorizontalAlignment
+        ) -> Extended {
+            switch horizontal {
+            case .leading: return 0
+            case .trailing:
+                guard container != .infinity, child != .infinity else { return 0 }
+                return container - child
+            case .center:
+                guard container != .infinity, child != .infinity else { return 0 }
+                return (container - child) / 2
+            }
+        }
+
+        private static func alignedOffset(
+            container: Extended,
+            child: Extended,
+            vertical: VerticalAlignment
+        ) -> Extended {
+            switch vertical {
+            case .top: return 0
+            case .bottom:
+                guard container != .infinity, child != .infinity else { return 0 }
+                return container - child
+            case .center:
+                guard container != .infinity, child != .infinity else { return 0 }
+                return (container - child) / 2
             }
         }
     }

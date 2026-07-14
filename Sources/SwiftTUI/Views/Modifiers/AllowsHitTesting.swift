@@ -14,30 +14,30 @@ private struct AllowsHitTesting<Content: View>: View, PrimitiveView, ModifierVie
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as! AllowsHitTestingControl).enabled = enabled
+        for control in node.elements?.values ?? [] {
+            (control as! AllowsHitTestingElement).enabled = enabled
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? AllowsHitTestingControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? AllowsHitTestingElement {
             existing.enabled = enabled
             return existing
         }
-        let wrapper = AllowsHitTestingControl(enabled: enabled)
+        let wrapper = AllowsHitTestingElement(enabled: enabled)
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 
-    private final class AllowsHitTestingControl: Control {
+    private final class AllowsHitTestingElement: Element {
         var enabled: Bool
 
         init(enabled: Bool) {
@@ -53,7 +53,7 @@ private struct AllowsHitTesting<Content: View>: View, PrimitiveView, ModifierVie
             children[0].layout(size: size)
         }
 
-        override func hitTest(position: Position) -> Control? {
+        override func hitTest(position: Position) -> Element? {
             guard enabled else { return nil }
             let local = position - layer.frame.position
             guard local.column >= 0, local.line >= 0,

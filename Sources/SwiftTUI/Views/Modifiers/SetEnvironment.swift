@@ -25,8 +25,9 @@ private struct SetEnvironment<Content: View, T>: View, PrimitiveView {
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.addNode(at: 0, Node(view: content.view))
+        // Environment must be visible before children build (title/toolbar register in buildNode).
         node.environment = { $0[keyPath: keyPath] = value }
+        node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
@@ -48,8 +49,8 @@ private struct SetEnvironmentObject<Content: View, T: AnyObject & Observable>: V
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.addNode(at: 0, Node(view: content.view))
         node.environment = { $0[T.self] = value }
+        node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {

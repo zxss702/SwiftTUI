@@ -29,7 +29,7 @@ import Foundation
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        node.control = TextControl(
+        node.element = TextElement(
             text: displayString,
             foregroundColor: foregroundColor,
             bold: bold,
@@ -44,7 +44,7 @@ import Foundation
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
-        let control = node.control as! TextControl
+        let control = node.element as! TextElement
         let previousText = control.text
         let previousLineLimit = control.lineLimit
         let previousTruncation = control.truncationMode
@@ -83,7 +83,7 @@ import Foundation
         return text ?? ""
     }
 
-    private class TextControl: Control {
+    private class TextElement: Element {
         var text: String
         var foregroundColor: Color
         var bold: Bool

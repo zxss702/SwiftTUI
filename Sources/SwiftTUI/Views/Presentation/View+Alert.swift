@@ -117,50 +117,53 @@ struct AlertContent<Message: View, Actions: View>: View, PrimitiveView, LayoutRo
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: makeHeader().view))
         node.addNode(at: 1, Node(view: actions.bold().view))
-        node.control = AlertContentControl()
+        node.element = AlertContentElement()
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: makeHeader().view)
         node.children[1].update(using: actions.bold().view)
-        let control = node.control as! AlertContentControl
-        control.headerControl = node.children[0].control(at: 0)
+        let control = node.element as! AlertContentElement
+        let header = node.children[0].element(at: 0)
+        control.headerElement = header
+        control.syncChild(header)
+        control.reconcileChildren(from: node.children[1], offset: 1)
     }
 
     func loadData(node: Node) {
-        let control = node.control as! AlertContentControl
-        control.headerControl = node.children[0].control(at: 0)
-        control.addSubview(control.headerControl, at: 0)
+        let control = node.element as! AlertContentElement
+        control.headerElement = node.children[0].element(at: 0)
+        control.addSubview(control.headerElement, at: 0)
         for i in 0 ..< node.children[1].size {
-            control.addSubview(node.children[1].control(at: i), at: i + 1)
+            control.addSubview(node.children[1].element(at: i), at: i + 1)
         }
     }
 
-    func insertControl(at index: Int, node: Node) {
-        let control = node.control as! AlertContentControl
+    func insertElement(at index: Int, node: Node) {
+        let control = node.element as! AlertContentElement
         if index == 0 { return }
-        control.addSubview(node.children[1].control(at: index - 1), at: index)
+        control.addSubview(node.children[1].element(at: index - 1), at: index)
     }
 
-    func removeControl(at index: Int, node: Node) {
-        let control = node.control as! AlertContentControl
+    func removeElement(at index: Int, node: Node) {
+        let control = node.element as! AlertContentElement
         if index == 0 { return }
         control.removeSubview(at: index)
     }
 }
 
 @MainActor
-private final class AlertContentControl: Control {
-    var headerControl: Control!
+private final class AlertContentElement: Element {
+    var headerElement: Element!
     private let actionSpacing: Extended = 1
 
-    private var actionControls: [Control] {
+    private var actionControls: [Element] {
         Array(children.dropFirst())
     }
 
     override func size(proposedSize: Size) -> Size {
-        let headerSize = headerControl.size(
+        let headerSize = headerElement.size(
             proposedSize: Size(width: proposedSize.width, height: proposedSize.height)
         )
 
@@ -185,11 +188,11 @@ private final class AlertContentControl: Control {
     override func layout(size: Size) {
         super.layout(size: size)
 
-        let headerHeight = headerControl.size(
+        let headerHeight = headerElement.size(
             proposedSize: Size(width: size.width, height: size.height)
         ).height
-        headerControl.layout(size: Size(width: size.width, height: headerHeight))
-        headerControl.layer.frame.position = .zero
+        headerElement.layout(size: Size(width: size.width, height: headerHeight))
+        headerElement.layer.frame.position = .zero
 
         let actions = actionControls
         guard !actions.isEmpty else { return }
@@ -212,7 +215,7 @@ private final class AlertContentControl: Control {
     }
 
     /// 将按钮标签在已分配的格子内水平/垂直居中。
-    private func centerLabel(of control: Control, in size: Size) {
+    private func centerLabel(of control: Element, in size: Size) {
         guard let label = control.children.first else { return }
         let labelSize = label.size(proposedSize: Size(width: .infinity, height: size.height))
         label.layout(size: labelSize)

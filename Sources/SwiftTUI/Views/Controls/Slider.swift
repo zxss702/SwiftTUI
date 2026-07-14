@@ -50,13 +50,13 @@ private struct SliderTrack: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        node.control = SliderControl(value: $value, bounds: bounds, step: step, isEnabled: isEnabled)
+        node.element = SliderElement(value: $value, bounds: bounds, step: step, isEnabled: isEnabled)
     }
 
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
-        let control = node.control as! SliderControl
+        let control = node.element as! SliderElement
         control.value = $value
         control.bounds = bounds
         control.step = step
@@ -66,7 +66,7 @@ private struct SliderTrack: View, PrimitiveView {
 }
 
 @MainActor
-private final class SliderControl: Control {
+private final class SliderElement: Element {
     var value: Binding<Double>
     var bounds: ClosedRange<Double>
     var step: Double?

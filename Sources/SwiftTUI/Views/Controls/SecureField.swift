@@ -47,7 +47,7 @@ private struct SecureFieldCore: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        let control = TextFieldControl(
+        let control = TextFieldElement(
             text: text,
             placeholder: title,
             placeholderColor: placeholderColor,
@@ -57,13 +57,13 @@ private struct SecureFieldCore: View, PrimitiveView {
             legacyAction: nil
         )
         control.secure = true
-        node.control = control
+        node.element = control
     }
 
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
-        let control = node.control as! TextFieldControl
+        let control = node.element as! TextFieldElement
         control.text = text
         control.placeholder = title
         control.placeholderColor = placeholderColor

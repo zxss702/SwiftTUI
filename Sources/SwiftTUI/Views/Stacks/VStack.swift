@@ -22,13 +22,13 @@ import Foundation
     
     func loadData(node: Node) {
         for i in 0 ..< node.children[0].size {
-            (node.control as! VStackControl).addSubview(node.children[0].control(at: i), at: i)
+            (node.element as! VStackElement).addSubview(node.children[0].element(at: i), at: i)
         }
     }
     
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: content.view))
-        node.control = VStackControl(alignment: alignment, spacing: spacing ?? 0)
+        node.element = VStackElement(alignment: alignment, spacing: spacing ?? 0)
         node.environment = { $0.stackOrientation = .vertical }
     }
     
@@ -36,24 +36,25 @@ import Foundation
         let previous = node.view as? Self
         node.view = self
         node.children[0].update(using: content.view)
-        let control = node.control as! VStackControl
+        let control = node.element as! VStackElement
         let newSpacing = spacing ?? 0
         if previous?.alignment != alignment || control.spacing != newSpacing {
             node.root.application?.requestLayout()
         }
         control.alignment = alignment
         control.spacing = newSpacing
+        control.reconcileChildren(from: node.children[0])
     }
     
-    func insertControl(at index: Int, node: Node) {
-        (node.control as! VStackControl).addSubview(node.children[0].control(at: index), at: index)
+    func insertElement(at index: Int, node: Node) {
+        (node.element as! VStackElement).addSubview(node.children[0].element(at: index), at: index)
     }
     
-    func removeControl(at index: Int, node: Node) {
-        (node.control as! VStackControl).removeSubview(at: index)
+    func removeElement(at index: Int, node: Node) {
+        (node.element as! VStackElement).removeSubview(at: index)
     }
     
-    private class VStackControl: Control {
+    private class VStackElement: Element {
         var alignment: HorizontalAlignment
         var spacing: Extended
 
@@ -116,7 +117,7 @@ import Foundation
             }
         }
 
-        private static func layoutOrder(width: Extended) -> (Control, Control) -> Bool {
+        private static func layoutOrder(width: Extended) -> (Element, Element) -> Bool {
             { a, b in
                 if a.layoutPriority != b.layoutPriority {
                     return a.layoutPriority > b.layoutPriority

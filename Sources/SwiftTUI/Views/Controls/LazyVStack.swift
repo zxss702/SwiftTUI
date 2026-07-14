@@ -21,7 +21,7 @@ import Foundation
     static var size: Int? { 1 }
 
     func loadData(node: Node) {
-        let control = node.control as! LazyVStackControl
+        let control = node.element as! LazyVStackElement
         control.contentNode = node.children[0]
         control.totalChildrenSize = node.children[0].size
         // Trigger initial layout population
@@ -30,7 +30,7 @@ import Foundation
 
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: content.view))
-        node.control = LazyVStackControl(
+        node.element = LazyVStackElement(
             alignment: alignment,
             spacing: spacing ?? 0,
             estimatedItemHeight: estimatedItemHeight
@@ -41,24 +41,26 @@ import Foundation
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        let control = node.control as! LazyVStackControl
+        let control = node.element as! LazyVStackElement
         control.alignment = alignment
         control.spacing = spacing ?? 0
         control.estimatedItemHeight = estimatedItemHeight
-        // ForEach 增删会先走 insert/removeControl；这里再按 content 身份对齐缓存，
-        // 避免 index 位移后仍挂着已删行的 Control。
-        control.reloadContent(totalChildrenSize: node.children[0].size)
+        // ForEach 增删会先走 insert/removeElement；这里再按 content 身份对齐缓存，
+        // 避免 index 位移后仍挂着已删行的 Element。
+        if control.reloadContent(totalChildrenSize: node.children[0].size) {
+            node.root.application?.requestLayout()
+        }
     }
 
-    func insertControl(at index: Int, node: Node) {
-        (node.control as! LazyVStackControl).handleInsert(at: index)
+    func insertElement(at index: Int, node: Node) {
+        (node.element as! LazyVStackElement).handleInsert(at: index)
     }
 
-    func removeControl(at index: Int, node: Node) {
-        (node.control as! LazyVStackControl).handleRemove(at: index)
+    func removeElement(at index: Int, node: Node) {
+        (node.element as! LazyVStackElement).handleRemove(at: index)
     }
 
-    private class LazyVStackControl: Control, LazyControl {
+    private class LazyVStackElement: Element, LazyElement {
         var alignment: HorizontalAlignment
         var spacing: Extended
         var estimatedItemHeight: Extended
@@ -70,50 +72,56 @@ import Foundation
         private var lastStartIndex: Int?
         private var lastEndIndex: Int?
 
-        private var loadedControls: [Int: Control] = [:]
+        private var loadedElements: [Int: Element] = [:]
         /// Measured heights for items that have been laid out; kept across unload so
         /// scroll-back reuses the last known size until the next measure.
         private var measuredHeights: [Int: Extended] = [:]
 
         func clearCache() {
-            unloadAllLoadedControls()
+            unloadAllLoadedElements()
             measuredHeights.removeAll()
             lastStartIndex = nil
             lastEndIndex = nil
         }
 
         /// Sync size / visible window. Drop indices past the end, and remount any
-        /// slot whose Control no longer matches `contentNode` (ForEach middle delete).
-        func reloadContent(totalChildrenSize: Int) {
+        /// slot whose Element no longer matches `contentNode` (ForEach middle delete).
+        /// - Returns: `true` when a loaded slot was dropped (caller should relayout).
+        @discardableResult
+        func reloadContent(totalChildrenSize: Int) -> Bool {
             self.totalChildrenSize = totalChildrenSize
+            var remounted = false
             var toRemove: [Int] = []
-            for (i, _) in loadedControls where i >= totalChildrenSize {
+            for (i, _) in loadedElements where i >= totalChildrenSize {
                 toRemove.append(i)
             }
             for i in toRemove {
-                unloadControl(at: i)
+                unloadElement(at: i)
+                remounted = true
             }
             for key in measuredHeights.keys where key >= totalChildrenSize {
                 measuredHeights.removeValue(forKey: key)
             }
             if let contentNode {
-                for (i, ctrl) in loadedControls {
-                    let expected = contentNode.control(at: i)
+                for (i, ctrl) in loadedElements {
+                    let expected = contentNode.element(at: i)
                     if ctrl !== expected {
-                        unloadControl(at: i)
+                        unloadElement(at: i)
+                        remounted = true
                     }
                 }
             }
             lastStartIndex = nil
             lastEndIndex = nil
             updateVisibleRegion(offset: lastOffset, height: lastHeight)
+            return remounted
         }
 
         func handleInsert(at index: Int) {
             totalChildrenSize += 1
-            for key in loadedControls.keys.filter({ $0 >= index }).sorted(by: >) {
-                if let ctrl = loadedControls.removeValue(forKey: key) {
-                    loadedControls[key + 1] = ctrl
+            for key in loadedElements.keys.filter({ $0 >= index }).sorted(by: >) {
+                if let ctrl = loadedElements.removeValue(forKey: key) {
+                    loadedElements[key + 1] = ctrl
                 }
             }
             for key in measuredHeights.keys.filter({ $0 >= index }).sorted(by: >) {
@@ -128,11 +136,11 @@ import Foundation
 
         func handleRemove(at index: Int) {
             totalChildrenSize = max(0, totalChildrenSize - 1)
-            unloadControl(at: index)
+            unloadElement(at: index)
             measuredHeights.removeValue(forKey: index)
-            for key in loadedControls.keys.filter({ $0 > index }).sorted() {
-                if let ctrl = loadedControls.removeValue(forKey: key) {
-                    loadedControls[key - 1] = ctrl
+            for key in loadedElements.keys.filter({ $0 > index }).sorted() {
+                if let ctrl = loadedElements.removeValue(forKey: key) {
+                    loadedElements[key - 1] = ctrl
                 }
             }
             for key in measuredHeights.keys.filter({ $0 > index }).sorted() {
@@ -145,18 +153,18 @@ import Foundation
             lastEndIndex = nil
         }
 
-        private func unloadAllLoadedControls() {
-            for i in Array(loadedControls.keys) {
-                unloadControl(at: i)
+        private func unloadAllLoadedElements() {
+            for i in Array(loadedElements.keys) {
+                unloadElement(at: i)
             }
         }
 
-        private func unloadControl(at index: Int) {
-            if let ctrl = loadedControls[index],
+        private func unloadElement(at index: Int) {
+            if let ctrl = loadedElements[index],
                let idx = children.firstIndex(where: { $0 === ctrl }) {
                 removeSubview(at: idx)
             }
-            loadedControls.removeValue(forKey: index)
+            loadedElements.removeValue(forKey: index)
             // Keep measuredHeights[index] so total size / scroll mapping stay stable
             // until handleRemove / reloadContent shifts or drops the slot.
         }
@@ -245,32 +253,32 @@ import Foundation
 
             // Incremental diff: only remove items that went off-screen
             var toRemove: [Int] = []
-            for (i, _) in loadedControls {
+            for (i, _) in loadedElements {
                 if i < startIndex || i > endIndex {
                     toRemove.append(i)
                 }
             }
             for i in toRemove {
-                unloadControl(at: i)
+                unloadElement(at: i)
             }
 
             // Only add items that are newly visible
             for i in startIndex...endIndex {
-                if loadedControls[i] == nil {
-                    let control = contentNode.control(at: i)
+                if loadedElements[i] == nil {
+                    let control = contentNode.element(at: i)
                     // Guard against an already-parented control (e.g. after a bad cache clear).
                     if control.parent == nil {
-                        loadedControls[i] = control
+                        loadedElements[i] = control
                         addSubview(control, at: children.count)
                     } else if control.parent === self {
-                        loadedControls[i] = control
+                        loadedElements[i] = control
                     } else {
                         // Detach from unexpected parent, then mount here.
                         if let oldParent = control.parent,
                            let idx = oldParent.children.firstIndex(where: { $0 === control }) {
                             oldParent.removeSubview(at: idx)
                         }
-                        loadedControls[i] = control
+                        loadedElements[i] = control
                         addSubview(control, at: children.count)
                     }
                 }
@@ -290,9 +298,9 @@ import Foundation
             // Same contract as VStack: propose the stack width, then layout at the
             // child's measured size (so wrap uses the proposal; frame size stays honest).
             var heightsChanged = false
-            let indices = loadedControls.keys.sorted()
+            let indices = loadedElements.keys.sorted()
             for index in indices {
-                guard let control = loadedControls[index] else { continue }
+                guard let control = loadedElements[index] else { continue }
 
                 var childSize = control.size(proposedSize: Size(width: size.width, height: .infinity))
                 // Unbounded-height children cannot contribute to scroll metrics; fall back

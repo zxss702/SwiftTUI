@@ -63,7 +63,8 @@ private struct PlaceholderColorEnvironmentKey: EnvironmentKey {
     static var defaultValue: Color { .brightBlack }
 }
 
-private final class StringBox: @unchecked Sendable {
+@MainActor
+private final class StringBox {
     var value = ""
 }
 
@@ -135,7 +136,7 @@ private struct TextFieldCore: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        let control = TextFieldControl(
+        let control = TextFieldElement(
             text: text,
             placeholder: placeholder,
             placeholderColor: placeholderColor,
@@ -145,13 +146,13 @@ private struct TextFieldCore: View, PrimitiveView {
             legacyAction: legacyAction
         )
         control.secure = secure
-        node.control = control
+        node.element = control
     }
 
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
-        let control = node.control as! TextFieldControl
+        let control = node.element as! TextFieldElement
         control.text = text
         control.placeholder = placeholder
         control.placeholderColor = placeholderColor
@@ -167,7 +168,7 @@ private struct TextFieldCore: View, PrimitiveView {
 }
 
 @MainActor
-final class TextFieldControl: Control {
+final class TextFieldElement: Element {
     var text: Binding<String>
     var placeholder: String
     var placeholderColor: Color
@@ -180,13 +181,16 @@ final class TextFieldControl: Control {
 
     /// 安全模式：刚输入的字符短暂明文显示（下一次输入或约 1s 后变 `•`）。
     private var revealedSecureIndex: Int? = nil
-    private var revealWork: DispatchWorkItem?
+    private var revealWorkID: HostClock.WorkID?
 
     /// 光标在字符串中的 Character 偏移。
     private var cursorIndex: Int = 0
     /// 可见窗口左侧列偏移。
     private var scrollOffset: Int = 0
     private var cachedText: String = ""
+    /// Local buffer is authoritative until the next frame commits Binding.
+    private var bindingDirty = false
+    private var editGeneration: UInt64 = 0
 
     init(
         text: Binding<String>,
@@ -208,8 +212,26 @@ final class TextFieldControl: Control {
         self.cursorIndex = cachedText.count
     }
 
+    override var needsBindingCommit: Bool { bindingDirty }
+
+    override func commitBindingIfNeeded() {
+        guard bindingDirty else { return }
+        bindingDirty = false
+        text.wrappedValue = cachedText
+    }
+
+    private func stageLocalEdit() {
+        editGeneration &+= 1
+        bindingDirty = true
+        ensureCursorVisible()
+        layer.invalidate()
+        layer.rootRenderer?.application?.noteEditorNeedsCommit(self)
+    }
+
     @discardableResult
     func syncFromBinding() -> Bool {
+        // Local edits win until frame commit; ignore Binding that still lags.
+        if bindingDirty { return false }
         let newText = text.wrappedValue
         guard newText != cachedText else { return false }
         cachedText = newText
@@ -244,6 +266,9 @@ final class TextFieldControl: Control {
         guard isEnabledFlag else { return }
         if char == "\n" {
             maskSecureImmediately()
+            // Flush Binding before submit so handlers see final text.
+            bindingDirty = false
+            text.wrappedValue = cachedText
             submitAction?()
             legacyAction?(cachedText)
             if legacyAction != nil {
@@ -252,6 +277,7 @@ final class TextFieldControl: Control {
                 scrollOffset = 0
                 text.wrappedValue = ""
                 layer.invalidate()
+                layer.rootRenderer?.application?.requestPaint()
             }
             return
         }
@@ -262,9 +288,7 @@ final class TextFieldControl: Control {
             cachedText = String(chars)
             cursorIndex -= 1
             maskSecureImmediately()
-            text.wrappedValue = cachedText
-            ensureCursorVisible()
-            layer.invalidate()
+            stageLocalEdit()
             return
         }
         var chars = Array(cachedText)
@@ -272,12 +296,10 @@ final class TextFieldControl: Control {
         cachedText = String(chars)
         let insertedAt = cursorIndex
         cursorIndex += 1
-        text.wrappedValue = cachedText
         if secure {
             revealSecureCharacter(at: insertedAt)
         }
-        ensureCursorVisible()
-        layer.invalidate()
+        stageLocalEdit()
     }
 
     override func handleKeyEvent(_ event: KeyEvent) {
@@ -391,14 +413,14 @@ final class TextFieldControl: Control {
     private func revealSecureCharacter(at index: Int) {
         cancelRevealTimer()
         revealedSecureIndex = index
-        let work = DispatchWorkItem { [weak self] in
+        guard let clock = layer.rootRenderer?.application?.clock else { return }
+        revealWorkID = clock.schedule(after: 1.0) { [weak self] in
             guard let self else { return }
             self.revealedSecureIndex = nil
+            self.revealWorkID = nil
             self.layer.invalidate()
-            self.layer.renderer?.application?.scheduleUpdate()
+            self.layer.rootRenderer?.application?.scheduleUpdate()
         }
-        revealWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
 
     private func maskSecureImmediately() {
@@ -409,8 +431,10 @@ final class TextFieldControl: Control {
     }
 
     private func cancelRevealTimer() {
-        revealWork?.cancel()
-        revealWork = nil
+        if let id = revealWorkID {
+            layer.rootRenderer?.application?.clock.cancel(id)
+            revealWorkID = nil
+        }
     }
 
     // MARK: - Scroll / columns

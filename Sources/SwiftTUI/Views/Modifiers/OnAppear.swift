@@ -14,30 +14,30 @@ private struct OnAppear<Content: View>: View, PrimitiveView, ModifierView {
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as! OnAppearControl).action = action
+        for control in node.elements?.values ?? [] {
+            (control as! OnAppearElement).action = action
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let onAppearControl = control.parent as? OnAppearControl {
-            onAppearControl.action = action
-            return onAppearControl
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let onAppearElement = control.parent as? OnAppearElement {
+            onAppearElement.action = action
+            return onAppearElement
         }
-        let onAppearControl = OnAppearControl(action: action)
-        onAppearControl.addSubview(control, at: 0)
-        node.controls?.add(onAppearControl)
-        return onAppearControl
+        let onAppearElement = OnAppearElement(action: action)
+        onAppearElement.addSubview(control, at: 0)
+        node.elements?.add(onAppearElement)
+        return onAppearElement
     }
 
-    private class OnAppearControl: Control {
+    private class OnAppearElement: Element {
         var action: () -> Void
         var didAppear = false
 
@@ -54,8 +54,9 @@ private struct OnAppear<Content: View>: View, PrimitiveView, ModifierView {
             children[0].layout(size: size)
             if !didAppear {
                 didAppear = true
-                let action = self.action
-                DispatchQueue.main.async { action() }
+                // Synchronous: `DispatchQueue.main.async` deferred title/toolbar/state
+                // until a later turn, which felt like "next click paints previous action".
+                action()
             }
         }
     }

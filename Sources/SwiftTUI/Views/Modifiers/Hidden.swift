@@ -15,33 +15,38 @@ private struct HiddenModifier<Content: View>: View, PrimitiveView, ModifierView 
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            let control = control as! HiddenControl
-            control.isHidden = isHidden
-            control.layer.invalidate()
+        for control in node.elements?.values ?? [] {
+            (control as! HiddenElement).isHidden = isHidden
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? HiddenControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? HiddenElement {
             existing.isHidden = isHidden
             return existing
         }
-        let wrapper = HiddenControl(isHidden: isHidden)
+        let wrapper = HiddenElement(isHidden: isHidden)
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 
-    private final class HiddenControl: Control {
-        var isHidden: Bool
+    private final class HiddenElement: Element {
+        var isHidden: Bool {
+            didSet {
+                if isHidden != oldValue {
+                    resignFocusIfNeeded()
+                    layer.invalidate()
+                }
+            }
+        }
 
         init(isHidden: Bool) {
             self.isHidden = isHidden
@@ -54,14 +59,26 @@ private struct HiddenModifier<Content: View>: View, PrimitiveView, ModifierView 
         override func layout(size: Size) {
             super.layout(size: size)
             children[0].layout(size: size)
+            resignFocusIfNeeded()
         }
 
-        override func hitTest(position: Position) -> Control? {
+        /// Keep-alive navigation pages stay mounted; hidden pages must not keep focus
+        /// or appear in tab/first-responder walks.
+        override var firstSelectableElement: Element? {
+            isHidden ? nil : super.firstSelectableElement
+        }
+
+        override func hitTest(position: Position) -> Element? {
             isHidden ? nil : super.hitTest(position: position)
         }
 
         override func makeLayer() -> Layer {
             HiddenLayer(isHidden: { [weak self] in self?.isHidden ?? false })
+        }
+
+        private func resignFocusIfNeeded() {
+            guard isHidden, let window = root.window else { return }
+            window.resignInteraction(in: self)
         }
     }
 

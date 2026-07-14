@@ -50,13 +50,13 @@ private struct StepperControlView: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        node.control = StepperControl(value: $value, bounds: bounds, step: step, isEnabled: isEnabled)
+        node.element = StepperElement(value: $value, bounds: bounds, step: step, isEnabled: isEnabled)
     }
 
     func updateNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
         node.view = self
-        let control = node.control as! StepperControl
+        let control = node.element as! StepperElement
         control.value = $value
         control.bounds = bounds
         control.step = step
@@ -66,7 +66,7 @@ private struct StepperControlView: View, PrimitiveView {
 }
 
 @MainActor
-private final class StepperControl: Control {
+private final class StepperElement: Element {
     var value: Binding<Int>
     var bounds: ClosedRange<Int>
     var step: Int

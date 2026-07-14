@@ -15,25 +15,30 @@ private struct OnHover<Content: View>: View, PrimitiveView, ModifierView {
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-    }
-
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let onHoverControl = control.parent as? OnHoverControl {
-            onHoverControl.action = action
-            return onHoverControl
+        for element in node.elements?.values ?? [] {
+            (element as! OnHoverElement).action = action
         }
-        let onHoverControl = OnHoverControl(action: action)
-        onHoverControl.addSubview(control, at: 0)
-        return onHoverControl
     }
 
-    private final class OnHoverControl: Control {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let onHoverElement = control.parent as? OnHoverElement {
+            onHoverElement.action = action
+            return onHoverElement
+        }
+        let onHoverElement = OnHoverElement(action: action)
+        onHoverElement.addSubview(control, at: 0)
+        node.elements?.add(onHoverElement)
+        return onHoverElement
+    }
+
+    private final class OnHoverElement: Element {
         var action: @MainActor (Bool) -> Void
 
         init(action: @escaping @MainActor (Bool) -> Void) {

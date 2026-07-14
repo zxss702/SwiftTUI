@@ -72,10 +72,6 @@ struct NavigationRootID: Hashable {
     /// NavigationBar 观察此值以在 toolbar 内容变化时刷新。
     var toolbarEpoch: Int = 0
 
-    /// Coalesce async toolbarEpoch bumps scheduled in the same turn.
-    @ObservationIgnored
-    private var toolbarBumpScheduled = false
-
     /// 当前页 id
     var currentPageID: AnyHashable {
         stack.last ?? AnyHashable(NavigationRootID.shared)
@@ -135,7 +131,7 @@ struct NavigationRootID: Hashable {
         directDestinations.removeValue(forKey: removed)
         titles.removeValue(forKey: removed)
         toolbars.removeValue(forKey: removed)
-        toolbarEpoch &+= 1
+        notifyChromeChange()
         syncToBinding()
         notifyItemBridges()
     }
@@ -178,6 +174,7 @@ struct NavigationRootID: Hashable {
     func setTitle(_ title: String, for id: AnyHashable) {
         guard titles[id] != title else { return }
         titles[id] = title
+        notifyChromeChange()
     }
 
     /// 由页面 `.toolbar` 在每次 body 求值时上报到当前页 id
@@ -186,16 +183,11 @@ struct NavigationRootID: Hashable {
     }
 
     func setToolbar(_ content: NavigationToolbarContent, for id: AnyHashable) {
+        // Always replace slot views (AnyView identity); bump only for the top page
+        // so keep-alive pages re-registering cannot storm the bar.
         toolbars[id] = content
-        // 异步 bump，避免在页面 body 的 Observation 追踪里读写 epoch 造成循环刷新。
-        // 同一轮内多次 registerToolbar 只 bump 一次。
-        guard !toolbarBumpScheduled else { return }
-        toolbarBumpScheduled = true
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            self.toolbarBumpScheduled = false
-            self.toolbarEpoch &+= 1
-        }
+        guard id == currentPageID else { return }
+        toolbarEpoch &+= 1
     }
 
     func toolbar(for id: AnyHashable) -> NavigationToolbarContent {
@@ -203,8 +195,11 @@ struct NavigationRootID: Hashable {
     }
 
     var currentToolbar: NavigationToolbarContent {
-        _ = toolbarEpoch
-        return toolbar(for: currentPageID)
+        toolbar(for: currentPageID)
+    }
+
+    private func notifyChromeChange() {
+        toolbarEpoch &+= 1
     }
 
     func destinationView(for value: AnyHashable) -> AnyView? {
@@ -267,20 +262,8 @@ final class NavigationItemBridge {
 
 @MainActor
 enum NavigationEnvironment {
-    /// 从 node 父链解析环境（子节点 environment 覆盖父节点）。
+    /// 从 node 解析环境（使用缓存）。
     static func values(from node: Node) -> EnvironmentValues {
-        func build(node: Node, transform: (inout EnvironmentValues) -> Void) -> EnvironmentValues {
-            if let parent = node.parent {
-                return build(node: parent) {
-                    node.environment?(&$0)
-                    transform(&$0)
-                }
-            }
-            var env = EnvironmentValues()
-            node.environment?(&env)
-            transform(&env)
-            return env
-        }
-        return build(node: node, transform: { _ in })
+        node.resolvedEnvironment()
     }
 }

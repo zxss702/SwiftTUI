@@ -60,18 +60,18 @@ private struct DeterminateBar: View, PrimitiveView {
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
-        node.control = DeterminateBarControl(value: value, total: total)
+        node.element = DeterminateBarElement(value: value, total: total)
     }
 
     func updateNode(_ node: Node) {
         node.view = self
-        let control = node.control as! DeterminateBarControl
+        let control = node.element as! DeterminateBarElement
         control.value = value
         control.total = total
         control.layer.invalidate()
     }
 
-    private final class DeterminateBarControl: Control {
+    private final class DeterminateBarElement: Element {
         var value: Double
         var total: Double
 
@@ -104,17 +104,17 @@ private struct SpinnerView: View, PrimitiveView {
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
-        node.control = SpinnerControl()
+        node.element = SpinnerElement()
     }
 
     func updateNode(_ node: Node) {
         node.view = self
     }
 
-    private final class SpinnerControl: Control {
+    private final class SpinnerElement: Element {
         private static let frames: [Character] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         private var index = 0
-        private var timer: Timer?
+        private var tickID: HostClock.WorkID?
 
         override func size(proposedSize: Size) -> Size {
             Size(width: 1, height: 1)
@@ -126,8 +126,7 @@ private struct SpinnerView: View, PrimitiveView {
         }
 
         override func willRemoveFromParent() {
-            timer?.invalidate()
-            timer = nil
+            stopTicks()
             super.willRemoveFromParent()
         }
 
@@ -137,14 +136,19 @@ private struct SpinnerView: View, PrimitiveView {
         }
 
         private func startIfNeeded() {
-            guard timer == nil else { return }
-            timer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.index = (self.index + 1) % Self.frames.count
-                    self.layer.invalidate()
-                    self.layer.renderer?.application?.scheduleUpdate()
-                }
+            guard tickID == nil, let clock = layer.rootRenderer?.application?.clock else { return }
+            tickID = clock.scheduleRepeating(every: 0.08) { [weak self] in
+                guard let self else { return }
+                self.index = (self.index + 1) % Self.frames.count
+                self.layer.invalidate()
+                self.layer.rootRenderer?.application?.scheduleUpdate()
+            }
+        }
+
+        private func stopTicks() {
+            if let id = tickID {
+                layer.rootRenderer?.application?.clock.cancel(id)
+                tickID = nil
             }
         }
     }

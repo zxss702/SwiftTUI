@@ -15,32 +15,32 @@ private struct OnDisappear<Content: View>: View, PrimitiveView, ModifierView {
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as! OnDisappearControl).action = action
+        for control in node.elements?.values ?? [] {
+            (control as! OnDisappearElement).action = action
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? OnDisappearControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? OnDisappearElement {
             existing.action = action
             return existing
         }
-        let wrapper = OnDisappearControl(action: action)
+        let wrapper = OnDisappearElement(action: action)
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 }
 
 @MainActor
-final class OnDisappearControl: Control {
+final class OnDisappearElement: Element {
     var action: () -> Void
     private var didDisappear = false
 
@@ -60,8 +60,8 @@ final class OnDisappearControl: Control {
     override func willRemoveFromParent() {
         if !didDisappear {
             didDisappear = true
-            let action = self.action
-            DispatchQueue.main.async { action() }
+            // Sync — same rule as onAppear: deferred GCD made chrome/state one-behind.
+            action()
         }
         super.willRemoveFromParent()
     }

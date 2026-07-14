@@ -9,7 +9,7 @@ enum SectionChromeRole {
 
 /// Wraps a section header or footer control so LazyVGrid can treat it as full-width chrome.
 @MainActor
-final class SectionChromeControl: Control {
+final class SectionChromeElement: Element {
     var role: SectionChromeRole
 
     init(role: SectionChromeRole) {
@@ -40,26 +40,26 @@ private struct SectionChrome<Content: View>: View, PrimitiveView, ModifierView {
     static var size: Int? { Content.size }
 
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        for control in node.controls?.values ?? [] {
-            (control as! SectionChromeControl).role = role
+        for control in node.elements?.values ?? [] {
+            (control as! SectionChromeElement).role = role
         }
     }
 
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let existing = control.parent as? SectionChromeControl {
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let existing = control.parent as? SectionChromeElement {
             existing.role = role
             return existing
         }
-        let wrapper = SectionChromeControl(role: role)
+        let wrapper = SectionChromeElement(role: role)
         wrapper.addSubview(control, at: 0)
-        node.controls?.add(wrapper)
+        node.elements?.add(wrapper)
         return wrapper
     }
 }

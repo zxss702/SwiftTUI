@@ -35,7 +35,7 @@ struct PresentationBindingModifier<Content: View, Presented: View>: View, Primit
 
         let sessionKey = "presentation.sessionID"
         if isPresented.wrappedValue {
-            let sessionID = node.state[sessionKey] as? UUID
+            let sessionID = node.storage[sessionKey] as? UUID
             let stillOurs = sessionID.map { presenter.contains($0) } ?? false
             if stillOurs, let sessionID {
                 // 宿主状态变了但 session 仍在：刷新 makePanel，让嵌套 sheet 等读到最新 Binding。
@@ -60,20 +60,20 @@ struct PresentationBindingModifier<Content: View, Presented: View>: View, Primit
                 switch kind {
                 case .sheet:
                     id = presenter.presentSheet(environmentSource: node, onDismiss: {
-                        node.state[sessionKey] = nil
+                        node.storage[sessionKey] = nil
                         finish()
                     }, content: presented)
                 case .alert:
                     id = presenter.presentAlert(environmentSource: node, onDismiss: {
-                        node.state[sessionKey] = nil
+                        node.storage[sessionKey] = nil
                         finish()
                     }, content: presented)
                 }
-                node.state[sessionKey] = id
+                node.storage[sessionKey] = id
             }
-        } else if let id = node.state[sessionKey] as? UUID {
+        } else if let id = node.storage[sessionKey] as? UUID {
             // isPresented → false：先清 session，再 dismiss，避免 onDismiss/finish 重入时误判 stillOurs。
-            node.state[sessionKey] = nil
+            node.storage[sessionKey] = nil
             if presenter.contains(id) {
                 presenter.dismiss(id: id)
             }
@@ -131,8 +131,8 @@ struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: Vi
         let presentedIDKey = "presentation.presentedID"
 
         if let value = item.wrappedValue {
-            let sessionID = node.state[sessionKey] as? UUID
-            let presentedID = node.state[presentedIDKey] as? AnyHashable
+            let sessionID = node.storage[sessionKey] as? UUID
+            let presentedID = node.storage[presentedIDKey] as? AnyHashable
             let stillOurs = (sessionID.map { presenter.contains($0) } ?? false)
                 && presentedID == AnyHashable(value.id)
             if stillOurs, let sessionID {
@@ -151,11 +151,11 @@ struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: Vi
                 if let old = sessionID, presenter.contains(old) {
                     presenter.dismiss(id: old)
                 }
-                node.state[presentedIDKey] = AnyHashable(value.id)
+                node.storage[presentedIDKey] = AnyHashable(value.id)
                 let binding = item
                 let onDismiss = self.onDismiss
                 let finish = {
-                    node.state[presentedIDKey] = nil
+                    node.storage[presentedIDKey] = nil
                     if binding.wrappedValue != nil { binding.wrappedValue = nil }
                     onDismiss?()
                 }
@@ -163,24 +163,24 @@ struct PresentationItemModifier<Content: View, Item: Identifiable, Presented: Vi
                 switch kind {
                 case .sheet:
                     id = presenter.presentSheet(environmentSource: node, onDismiss: {
-                        node.state[sessionKey] = nil
+                        node.storage[sessionKey] = nil
                         finish()
                     }) {
                         presented(value)
                     }
                 case .alert:
                     id = presenter.presentAlert(environmentSource: node, onDismiss: {
-                        node.state[sessionKey] = nil
+                        node.storage[sessionKey] = nil
                         finish()
                     }) {
                         presented(value)
                     }
                 }
-                node.state[sessionKey] = id
+                node.storage[sessionKey] = id
             }
-        } else if let id = node.state[sessionKey] as? UUID {
-            node.state[sessionKey] = nil
-            node.state[presentedIDKey] = nil
+        } else if let id = node.storage[sessionKey] as? UUID {
+            node.storage[sessionKey] = nil
+            node.storage[presentedIDKey] = nil
             if presenter.contains(id) {
                 presenter.dismiss(id: id)
             }
@@ -220,25 +220,27 @@ struct PopoverBindingModifier<Content: View, Presented: View>: View, PrimitiveVi
 
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: content.view))
-        let control = PopoverHostControl()
-        control.contentControl = node.children[0].control(at: 0)
-        control.addSubview(control.contentControl, at: 0)
-        node.control = control
+        let control = PopoverHostElement()
+        control.contentElement = node.children[0].element(at: 0)
+        control.addSubview(control.contentElement, at: 0)
+        node.element = control
         sync(node)
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        let control = node.control as! PopoverHostControl
-        control.contentControl = node.children[0].control(at: 0)
+        let control = node.element as! PopoverHostElement
+        let newContent = node.children[0].element(at: 0)
+        control.contentElement = newContent
+        control.syncChild(newContent)
         sync(node)
     }
 
     private func sync(_ node: Node) {
         let env = NavigationEnvironment.values(from: node)
         guard let presenter = env[PopupPresenter.self] else { return }
-        let control = node.control as! PopoverHostControl
+        let control = node.element as! PopoverHostElement
         let binding = isPresented
 
         if binding.wrappedValue {
@@ -287,25 +289,27 @@ struct PopoverItemModifier<Content: View, Item: Identifiable, Presented: View>: 
 
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: content.view))
-        let control = PopoverHostControl()
-        control.contentControl = node.children[0].control(at: 0)
-        control.addSubview(control.contentControl, at: 0)
-        node.control = control
+        let control = PopoverHostElement()
+        control.contentElement = node.children[0].element(at: 0)
+        control.addSubview(control.contentElement, at: 0)
+        node.element = control
         sync(node)
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: content.view)
-        let control = node.control as! PopoverHostControl
-        control.contentControl = node.children[0].control(at: 0)
+        let control = node.element as! PopoverHostElement
+        let newContent = node.children[0].element(at: 0)
+        control.contentElement = newContent
+        control.syncChild(newContent)
         sync(node)
     }
 
     private func sync(_ node: Node) {
         let env = NavigationEnvironment.values(from: node)
         guard let presenter = env[PopupPresenter.self] else { return }
-        let control = node.control as! PopoverHostControl
+        let control = node.element as! PopoverHostElement
         let binding = item
 
         if let value = binding.wrappedValue {
@@ -352,17 +356,17 @@ struct PopoverItemModifier<Content: View, Item: Identifiable, Presented: View>: 
 }
 
 @MainActor
-private final class PopoverHostControl: Control {
-    var contentControl: Control!
+private final class PopoverHostElement: Element {
+    var contentElement: Element!
     var token: UUID?
     var presentedID: AnyHashable?
 
     override func size(proposedSize: Size) -> Size {
-        contentControl.size(proposedSize: proposedSize)
+        contentElement.size(proposedSize: proposedSize)
     }
 
     override func layout(size: Size) {
         super.layout(size: size)
-        contentControl.layout(size: size)
+        contentElement.layout(size: size)
     }
 }

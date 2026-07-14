@@ -22,8 +22,8 @@ final class PresentationRecord: Identifiable {
     var anchor: Rect
     var panelFrame: Rect?
     let onDismiss: () -> Void
-    /// 该层悬浮 Control，dismiss 后把焦点还给新的 top。
-    weak var hostControl: Control?
+    /// 该层悬浮 Element，dismiss 后把焦点还给新的 top。
+    weak var hostElement: Element?
     /// 悬浮层 Node，用于状态变化时原地刷新面板内容。
     weak var layerNode: Node?
     /// 发起 present 的视图节点；叠层挂在根 Overlay 上，需从此处继承 Environment。
@@ -100,10 +100,11 @@ public final class PopupPresenter {
     }
 
     /// 用最新内容闭包替换已 present 层的 `makePanel`（宿主 modifier 每次 sync 时调用）。
-    /// 不在这里置 `needsPanelRefresh`：调用方一定在节点 update 路径上，`invalidateNode` 已标记刷新。
     func updateMakePanel(id: UUID, makePanel: @escaping () -> AnyView) {
         guard let record = record(id: id) else { return }
         record.makePanel = makePanel
+        // Same settle as host update — do not wait for a later invalidate.
+        needsPanelRefresh = true
     }
 
     /// 由 Application 在节点失效时标记；update 循环末尾调用 `refreshPresentedPanels`。
@@ -243,8 +244,8 @@ public final class PopupPresenter {
     public func dismiss(id: UUID) {
         guard let index = stack.firstIndex(where: { $0.id == id }) else { return }
         let removed = Array(stack[index...])
-        let window = removed.lazy.reversed().compactMap(\.hostControl?.window).first
-            ?? stack.first?.hostControl?.window
+        let window = removed.lazy.reversed().compactMap(\.hostElement?.window).first
+            ?? stack.first?.hostElement?.window
         stack.removeSubrange(index...)
         for record in removed.reversed() {
             record.onDismiss()
@@ -256,7 +257,7 @@ public final class PopupPresenter {
     public func dismissAll() {
         guard !stack.isEmpty else { return }
         let removed = stack
-        let window = removed.lazy.reversed().compactMap(\.hostControl?.window).first
+        let window = removed.lazy.reversed().compactMap(\.hostElement?.window).first
         stack = []
         for record in removed.reversed() {
             record.onDismiss()
@@ -292,14 +293,18 @@ public final class PopupPresenter {
     }
 
     private func restoreFocus(afterDismissToWindow window: Window?) {
-        if let control = stack.last?.hostControl {
+        if let control = stack.last?.hostElement {
             stealFocus(control)
             return
         }
         // 栈空时必须把焦点还给主界面；否则 firstResponder 仍停在已卸下的 sheet 控件上。
-        DispatchQueue.main.async {
-            guard let window else { return }
-            window.setFirstResponder(window.controls.first?.firstSelectableElement)
+        guard let window else { return }
+        if let clock = window.layer.rootRenderer?.application?.clock {
+            clock.scheduleNextTurn {
+                window.setFirstResponder(window.elements.first?.firstSelectableElement)
+            }
+        } else {
+            window.setFirstResponder(window.elements.first?.firstSelectableElement)
         }
     }
 }
@@ -358,7 +363,7 @@ private func installInheritedEnvironment(on node: Node, from source: Node?) {
 }
 
 @MainActor
-private func attachPanel(to host: Control, panel: Control, stored: inout Control!) {
+private func attachPanel(to host: Element, panel: Element, stored: inout Element!) {
     if stored === panel, host.children.contains(where: { $0 === panel }) {
         return
     }
@@ -386,10 +391,10 @@ private struct FloatingPopupLayer: View, PrimitiveView {
         entry.layerNode = node
         installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.addNode(at: 0, Node(view: entry.makePanel().view))
-        let control = FloatingPopupControl(entry: entry, presenter: presenter)
-        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
-        entry.hostControl = control
-        node.control = control
+        let control = FloatingPopupElement(entry: entry, presenter: presenter)
+        attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.hostElement = control
+        node.element = control
         stealFocus(control)
     }
 
@@ -398,20 +403,20 @@ private struct FloatingPopupLayer: View, PrimitiveView {
         node.view = self
         installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.children[0].update(using: entry.makePanel().view)
-        let control = node.control as! FloatingPopupControl
+        let control = node.element as! FloatingPopupElement
         control.entry = entry
         control.presenter = presenter
-        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
-        entry.hostControl = control
+        attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.hostElement = control
         control.layer.invalidate()
     }
 }
 
 @MainActor
-private final class FloatingPopupControl: Control {
+private final class FloatingPopupElement: Element {
     var entry: PresentationRecord
     weak var presenter: PopupPresenter?
-    var panelControl: Control!
+    var panelElement: Element!
 
     init(entry: PresentationRecord, presenter: PopupPresenter) {
         self.entry = entry
@@ -424,21 +429,21 @@ private final class FloatingPopupControl: Control {
 
     override func layout(size: Size) {
         super.layout(size: size)
-        guard let panelControl else { return }
+        guard let panelElement else { return }
         let anchor = entry.anchor
 
         let spaceBelow = max(Extended(1), size.height - (anchor.position.line + max(anchor.size.height, 1)))
         let spaceAbove = max(Extended(1), anchor.position.line)
         let maxHeight = max(spaceBelow, spaceAbove)
 
-        let measured = panelControl.size(
+        let measured = panelElement.size(
             proposedSize: Size(width: max(anchor.size.width + 8, 24), height: .infinity)
         )
         let panelSize = Size(
             width: min(max(measured.width, 8), size.width),
             height: min(max(measured.height, 1), maxHeight)
         )
-        panelControl.layout(size: panelSize)
+        panelElement.layout(size: panelSize)
 
         let anchorTrailing = anchor.position.column + max(anchor.size.width, 1)
         var column = anchorTrailing - panelSize.width
@@ -454,16 +459,16 @@ private final class FloatingPopupControl: Control {
         if line + panelSize.height > size.height {
             line = max(0, size.height - panelSize.height)
         }
-        panelControl.layer.frame.position = Position(column: column, line: line)
-        entry.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
+        panelElement.layer.frame.position = Position(column: column, line: line)
+        entry.panelFrame = Rect(position: panelElement.layer.frame.position, size: panelSize)
     }
 
     override func draw(into buffer: inout ScreenBuffer) {}
 
-    override func hitTest(position: Position) -> Control? {
+    override func hitTest(position: Position) -> Element? {
         let local = position - layer.frame.position
-        guard let panelControl else { return nil }
-        return panelControl.hitTest(position: local)
+        guard let panelElement else { return nil }
+        return panelElement.hitTest(position: local)
     }
 
     override func handleKeyEvent(_ event: KeyEvent) {
@@ -489,10 +494,10 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
         entry.layerNode = node
         installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.addNode(at: 0, Node(view: entry.makePanel().view))
-        let control = PopoverFloatingControl(entry: entry, presenter: presenter)
-        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
-        entry.hostControl = control
-        node.control = control
+        let control = PopoverFloatingElement(entry: entry, presenter: presenter)
+        attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.hostElement = control
+        node.element = control
         stealFocus(control)
     }
 
@@ -501,20 +506,20 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
         node.view = self
         installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.children[0].update(using: entry.makePanel().view)
-        let control = node.control as! PopoverFloatingControl
+        let control = node.element as! PopoverFloatingElement
         control.entry = entry
         control.presenter = presenter
-        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
-        entry.hostControl = control
+        attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.hostElement = control
         control.layer.invalidate()
     }
 }
 
 @MainActor
-private final class PopoverFloatingControl: Control {
+private final class PopoverFloatingElement: Element {
     var entry: PresentationRecord
     weak var presenter: PopupPresenter?
-    var panelControl: Control!
+    var panelElement: Element!
 
     init(entry: PresentationRecord, presenter: PopupPresenter) {
         self.entry = entry
@@ -526,7 +531,7 @@ private final class PopoverFloatingControl: Control {
 
     override func layout(size: Size) {
         super.layout(size: size)
-        guard let panelControl else { return }
+        guard let panelElement else { return }
         let anchor = entry.anchor
 
         let spaceBelow = max(Extended(0), size.height - (anchor.position.line + max(anchor.size.height, 1)))
@@ -535,7 +540,7 @@ private final class PopoverFloatingControl: Control {
         let spaceLeading = max(Extended(0), anchor.position.column)
 
         // 先按「尽量大」测固有尺寸，再按四边空间选型
-        let measured = panelControl.size(
+        let measured = panelElement.size(
             proposedSize: Size(
                 width: max(Extended(6), size.width),
                 height: .infinity
@@ -575,7 +580,7 @@ private final class PopoverFloatingControl: Control {
                 height: ideal.height
             )
         }
-        panelControl.layout(size: panelSize)
+        panelElement.layout(size: panelSize)
 
         let anchorCenterX = anchor.position.column + max(anchor.size.width, 1) / 2
         let anchorCenterY = anchor.position.line + max(anchor.size.height, 1) / 2
@@ -604,15 +609,15 @@ private final class PopoverFloatingControl: Control {
             line = max(0, size.height - panelSize.height)
         }
 
-        panelControl.layer.frame.position = Position(column: column, line: line)
-        entry.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
+        panelElement.layer.frame.position = Position(column: column, line: line)
+        entry.panelFrame = Rect(position: panelElement.layer.frame.position, size: panelSize)
     }
 
     override func draw(into buffer: inout ScreenBuffer) {}
 
-    override func hitTest(position: Position) -> Control? {
+    override func hitTest(position: Position) -> Element? {
         let local = position - layer.frame.position
-        return panelControl?.hitTest(position: local)
+        return panelElement?.hitTest(position: local)
     }
 
     override func handleKeyEvent(_ event: KeyEvent) {
@@ -638,10 +643,10 @@ private struct ModalFloatingLayer: View, PrimitiveView {
         entry.layerNode = node
         installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.addNode(at: 0, Node(view: entry.makePanel().view))
-        let control = ModalFloatingControl(entry: entry, presenter: presenter)
-        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
-        entry.hostControl = control
-        node.control = control
+        let control = ModalFloatingElement(entry: entry, presenter: presenter)
+        attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.hostElement = control
+        node.element = control
         stealFocus(control)
     }
 
@@ -650,20 +655,20 @@ private struct ModalFloatingLayer: View, PrimitiveView {
         node.view = self
         installInheritedEnvironment(on: node, from: entry.environmentSource)
         node.children[0].update(using: entry.makePanel().view)
-        let control = node.control as! ModalFloatingControl
+        let control = node.element as! ModalFloatingElement
         control.entry = entry
         control.presenter = presenter
-        attachPanel(to: control, panel: node.children[0].control(at: 0), stored: &control.panelControl)
-        entry.hostControl = control
+        attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.hostElement = control
         control.layer.invalidate()
     }
 }
 
 @MainActor
-private final class ModalFloatingControl: Control {
+private final class ModalFloatingElement: Element {
     var entry: PresentationRecord
     weak var presenter: PopupPresenter?
-    var panelControl: Control!
+    var panelElement: Element!
 
     init(entry: PresentationRecord, presenter: PopupPresenter) {
         self.entry = entry
@@ -675,20 +680,20 @@ private final class ModalFloatingControl: Control {
 
     override func layout(size: Size) {
         super.layout(size: size)
-        guard let panelControl else { return }
+        guard let panelElement else { return }
 
         let maxW = max(Extended(8), size.width - 4)
         let maxH = max(Extended(3), size.height - 2)
-        let measured = panelControl.size(proposedSize: Size(width: maxW, height: .infinity))
+        let measured = panelElement.size(proposedSize: Size(width: maxW, height: .infinity))
         let panelSize = Size(
             width: min(max(measured.width, 1), maxW),
             height: min(max(measured.height, 1), maxH)
         )
-        panelControl.layout(size: panelSize)
+        panelElement.layout(size: panelSize)
         let column = max(0, (size.width - panelSize.width) / 2)
         let line = max(0, (size.height - panelSize.height) / 2)
-        panelControl.layer.frame.position = Position(column: column, line: line)
-        entry.panelFrame = Rect(position: panelControl.layer.frame.position, size: panelSize)
+        panelElement.layer.frame.position = Position(column: column, line: line)
+        entry.panelFrame = Rect(position: panelElement.layer.frame.position, size: panelSize)
     }
 
     override func draw(into buffer: inout ScreenBuffer) {
@@ -705,9 +710,9 @@ private final class ModalFloatingControl: Control {
         }
     }
 
-    override func hitTest(position: Position) -> Control? {
+    override func hitTest(position: Position) -> Element? {
         let local = position - layer.frame.position
-        if let hit = panelControl?.hitTest(position: local) {
+        if let hit = panelElement?.hitTest(position: local) {
             return hit
         }
         return self
@@ -734,10 +739,14 @@ private final class ModalFloatingControl: Control {
 // MARK: - Focus helper
 
 @MainActor
-private func stealFocus(_ control: Control) {
-    DispatchQueue.main.async {
-        guard let window = control.window else { return }
-        let target = control.canReceiveFocus ? control : (control.firstSelectableElement ?? control)
+private func stealFocus(_ control: Element) {
+    guard let window = control.window else { return }
+    let target = control.canReceiveFocus ? control : (control.firstSelectableElement ?? control)
+    if let clock = window.layer.rootRenderer?.application?.clock {
+        clock.scheduleNextTurn {
+            window.setFirstResponder(target)
+        }
+    } else {
         window.setFirstResponder(target)
     }
 }
@@ -807,19 +816,23 @@ struct PopupAnchorButton<Label: View>: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         node.addNode(at: 0, Node(view: VStack(content: label).view))
-        let control = PopupAnchorButtonControl { [weak node] anchor in
+        let control = PopupAnchorButtonElement { [weak node] anchor in
             guard let node else { return }
             action(anchor, node)
         }
-        control.label = node.children[0].control(at: 0)
+        control.label = node.children[0].element(at: 0)
         control.addSubview(control.label, at: 0)
-        node.control = control
+        node.element = control
     }
 
     func updateNode(_ node: Node) {
         node.view = self
         node.children[0].update(using: VStack(content: label).view)
-        (node.control as! PopupAnchorButtonControl).action = { [weak node] anchor in
+        let control = node.element as! PopupAnchorButtonElement
+        let newLabel = node.children[0].element(at: 0)
+        control.label = newLabel
+        control.syncChild(newLabel)
+        control.action = { [weak node] anchor in
             guard let node else { return }
             action(anchor, node)
         }
@@ -827,9 +840,9 @@ struct PopupAnchorButton<Label: View>: View, PrimitiveView {
 }
 
 @MainActor
-private final class PopupAnchorButtonControl: Control {
+private final class PopupAnchorButtonElement: Element {
     var action: (Rect) -> Void
-    var label: Control!
+    var label: Element!
     private weak var buttonLayer: AnchorButtonLayer?
 
     init(action: @escaping (Rect) -> Void) {

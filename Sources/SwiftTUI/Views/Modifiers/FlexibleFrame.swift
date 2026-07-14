@@ -25,7 +25,7 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
     static var size: Int? { Content.size }
     
     func buildNode(_ node: Node) {
-        node.controls = WeakSet<Control>()
+        node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
     }
     
@@ -38,8 +38,8 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
             || previous?.minHeight != minHeight
             || previous?.maxHeight != maxHeight
             || previous?.alignment != alignment
-        for control in node.controls?.values ?? [] {
-            let control = control as! FlexibleFrameControl
+        for control in node.elements?.values ?? [] {
+            let control = control as! FlexibleFrameElement
             control.minWidth = minWidth
             control.maxWidth = maxWidth
             control.minHeight = minHeight
@@ -51,15 +51,22 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
         }
     }
     
-    func passControl(_ control: Control, node: Node) -> Control {
-        if let fixedFrameControl = control.parent { return fixedFrameControl }
-        let fixedFrameControl = FlexibleFrameControl(minWidth: minWidth, maxWidth: maxWidth, minHeight: minHeight, maxHeight: maxHeight, alignment: alignment)
-        fixedFrameControl.addSubview(control, at: 0)
-        node.controls?.add(fixedFrameControl)
-        return fixedFrameControl
+    func passElement(_ control: Element, node: Node) -> Element {
+        if let frame = control.parent as? FlexibleFrameElement {
+            frame.minWidth = minWidth
+            frame.maxWidth = maxWidth
+            frame.minHeight = minHeight
+            frame.maxHeight = maxHeight
+            frame.alignment = alignment
+            return frame
+        }
+        let frame = FlexibleFrameElement(minWidth: minWidth, maxWidth: maxWidth, minHeight: minHeight, maxHeight: maxHeight, alignment: alignment)
+        frame.addSubview(control, at: 0)
+        node.elements?.add(frame)
+        return frame
     }
     
-    private class FlexibleFrameControl: Control {
+    private class FlexibleFrameElement: Element {
         var minWidth: Extended?
         var maxWidth: Extended?
         var minHeight: Extended?
@@ -75,6 +82,9 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
         }
         
         override func size(proposedSize: Size) -> Size {
+            // Expand to the offered size when maxWidth/maxHeight is set (incl. `.infinity`).
+            // Do NOT collapse an unbounded offer to the child's ideal size — that breaks
+            // HStack/VStack flexibility (`.frame(maxWidth: .infinity)` must stay expandable).
             var proposedSize = proposedSize
             proposedSize.width = min(maxWidth ?? .infinity, max(minWidth ?? 0, proposedSize.width))
             proposedSize.height = min(maxHeight ?? .infinity, max(minHeight ?? 0, proposedSize.height))
@@ -93,19 +103,53 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
             // 提案满尺寸，子视图可自行扩展（如 Spacer）；若仍更小则按 alignment 居中
             children[0].layout(size: children[0].size(proposedSize: size))
             let oldFrame = children[0].layer.frame
-            switch alignment.verticalAlignment {
-            case .top: children[0].layer.frame.position.line = 0
-            case .center: children[0].layer.frame.position.line = (size.height - children[0].layer.frame.size.height) / 2
-            case .bottom: children[0].layer.frame.position.line = size.height - children[0].layer.frame.size.height
-            }
-            switch alignment.horizontalAlignment {
-            case .leading: children[0].layer.frame.position.column = 0
-            case .center: children[0].layer.frame.position.column = (size.width - children[0].layer.frame.size.width) / 2
-            case .trailing: children[0].layer.frame.position.column = size.width - children[0].layer.frame.size.width
-            }
+            let child = children[0].layer.frame.size
+            children[0].layer.frame.position.line = alignedOffset(
+                container: size.height,
+                child: child.height,
+                alignment: alignment.verticalAlignment
+            )
+            children[0].layer.frame.position.column = alignedOffset(
+                container: size.width,
+                child: child.width,
+                alignment: alignment.horizontalAlignment
+            )
             if oldFrame != children[0].layer.frame {
                 self.layer.invalidate(rect: oldFrame)
                 self.layer.invalidate(rect: children[0].layer.frame)
+            }
+        }
+
+        /// Avoid ∞−∞ when `.fixedSize()` proposes infinity into `.frame(maxWidth: .infinity)`.
+        private func alignedOffset(
+            container: Extended,
+            child: Extended,
+            alignment: VerticalAlignment
+        ) -> Extended {
+            switch alignment {
+            case .top: return 0
+            case .bottom:
+                guard container != .infinity, child != .infinity else { return 0 }
+                return container - child
+            case .center:
+                guard container != .infinity, child != .infinity else { return 0 }
+                return (container - child) / 2
+            }
+        }
+
+        private func alignedOffset(
+            container: Extended,
+            child: Extended,
+            alignment: HorizontalAlignment
+        ) -> Extended {
+            switch alignment {
+            case .leading: return 0
+            case .trailing:
+                guard container != .infinity, child != .infinity else { return 0 }
+                return container - child
+            case .center:
+                guard container != .infinity, child != .infinity else { return 0 }
+                return (container - child) / 2
             }
         }
     }

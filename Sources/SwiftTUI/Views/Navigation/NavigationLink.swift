@@ -68,8 +68,9 @@ private struct NavigationLinkBody<Label: View>: View {
     @Environment(NavigationContext.self) private var context
 
     var body: some View {
+        let navigation = context
         Button {
-            performNavigation(context)
+            performNavigation(navigation)
         } label: {
             label
         }
