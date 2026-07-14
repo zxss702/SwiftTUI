@@ -221,6 +221,14 @@ final class TextFieldElement: Element {
     }
 
     private func stageLocalEdit() {
+        // #region agent log
+        DebugSessionLog.write(
+            hypothesisId: "E",
+            location: "TextFieldElement.stageLocalEdit",
+            message: "staged edit",
+            data: ["len": cachedText.count, "isFR": isFirstResponder]
+        )
+        // #endregion
         editGeneration &+= 1
         bindingDirty = true
         ensureCursorVisible()

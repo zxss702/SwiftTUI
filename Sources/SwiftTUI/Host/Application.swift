@@ -205,6 +205,16 @@ public final class Application {
             // `await present`). Yield — do not burn the commit budget on no-ops.
             if isUpdating {
                 yieldsWhileBusy += 1
+                // #region agent log
+                if yieldsWhileBusy == 1 || yieldsWhileBusy == 32 || yieldsWhileBusy > 64 {
+                    DebugSessionLog.write(
+                        hypothesisId: "C",
+                        location: "Application.settleHost:busy",
+                        message: "yield while isUpdating",
+                        data: ["yields": yieldsWhileBusy, "commits": commits]
+                    )
+                }
+                // #endregion
                 if yieldsWhileBusy > 64 { break }
                 await Task.yield()
                 continue
