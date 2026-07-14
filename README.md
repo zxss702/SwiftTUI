@@ -70,22 +70,19 @@ swift run
 
 ## 架构
 
-SwiftTUI 采用分层架构，核心位于 `Sources/SwiftTUI/VirtualTerminal/`：
+Host：输入泵 + 合并 wake 的 frame 任务；交互事件当轮 settle，mouse-move 只调度（避免 1003 饿死键鼠）。帧阶段固定为 Update → Layout → Paint → Present。详见 [Docs/Architecture.md](Docs/Architecture.md)。
 
 ```
-View 层（声明式 SwiftUI 风格）
+View（SwiftUI 风格 DSL）
        │
-   Control 树（hitTest / 焦点 / 事件分发）
+   ViewGraph（Node / @State 槽位 / Observation）
        │
-VirtualTerminal 子系统
-  ├── VTEventStream — AsyncSequence，统一接收键盘/鼠标/窗口变化事件
-  ├── VTInputParser  — 解析 ANSI 转义序列和终端输入
-  ├── Platform（POSIX / Windows）— 平台适配
-  ├── VTRenderer      — 差分渲染，SGR 优化，光标运动压缩
-  └── Buffer           — 终端网格缓冲区，逐 cell 管理
+   Element 树（layout / focus / hit-test / paint）
        │
-   stdout（直接写入终端）
+VirtualTerminal（差分 present）
 ```
+
+入口刻意为 CLI 形状：`Application(rootView:).start()`（不是 `App` / `WindowGroup`）。
 
 ## 参与贡献
 我们非常欢迎你为 SwiftTUI 提交代码或提出宝贵建议！在提交代码前，请务必阅读我们的 [贡献指南 (CONTRIBUTING.md)](CONTRIBUTING.md)。
