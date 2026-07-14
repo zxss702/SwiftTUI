@@ -95,6 +95,14 @@ import Foundation
         }
 
         private func performAction() {
+            // #region agent log
+            DebugSessionLog.write(
+                hypothesisId: "E",
+                location: "ButtonElement.performAction",
+                message: "button fired",
+                data: ["hasOnActivate": onActivate != nil]
+            )
+            // #endregion
             if let onActivate {
                 onActivate()
             } else {
