@@ -155,9 +155,41 @@ public final class Application {
     /// Production input dispatch: handle, then settle only when the event must
     /// be visible before the next read (not on mouse-move floods).
     func dispatchTerminalEvent(_ event: VTEvent) async throws {
+        // #region agent log
+        let settle = HostEventPolicy.requiresInlineSettle(event)
+        DebugSessionLog.write(
+            hypothesisId: "C",
+            location: "Application.dispatchTerminalEvent:entry",
+            message: "dispatch",
+            data: [
+                "event": String(describing: event),
+                "inlineSettle": settle,
+                "isUpdating": isUpdating,
+                "hasPending": hasPendingCommitWork,
+                "fr": DebugSessionLog.typeName(window.firstResponder),
+                "capture": DebugSessionLog.typeName(window.mouseCapture),
+            ]
+        )
+        // #endregion
         handleTerminalEvent(event)
-        if HostEventPolicy.requiresInlineSettle(event) {
+        if settle {
+            // #region agent log
+            let t0 = Date().timeIntervalSince1970
+            // #endregion
             try await settleHost()
+            // #region agent log
+            DebugSessionLog.write(
+                hypothesisId: "C",
+                location: "Application.dispatchTerminalEvent:afterSettle",
+                message: "settle done",
+                data: [
+                    "ms": Int((Date().timeIntervalSince1970 - t0) * 1000),
+                    "isUpdating": isUpdating,
+                    "hasPending": hasPendingCommitWork,
+                    "fr": DebugSessionLog.typeName(window.firstResponder),
+                ]
+            )
+            // #endregion
         } else if hasPendingCommitWork {
             scheduleUpdate()
         }
@@ -301,6 +333,19 @@ public final class Application {
         }
         #endif
 
+        // #region agent log
+        DebugSessionLog.write(
+            hypothesisId: "A",
+            location: "Application.handleKeyInput",
+            message: "key",
+            data: [
+                "char": event.character.map(String.init) ?? "",
+                "fr": DebugSessionLog.typeName(window.firstResponder),
+                "frCanFocus": window.firstResponder?.canReceiveFocus ?? false,
+            ]
+        )
+        // #endregion
+
         // Keys go only to firstResponder — never broadcast down the tree.
         window.firstResponder?.handleKeyEvent(event)
     }
@@ -311,6 +356,19 @@ public final class Application {
         if let capture = window.mouseCapture {
             switch event.type {
             case .move, .released:
+                // #region agent log
+                if case .released = event.type {
+                    DebugSessionLog.write(
+                        hypothesisId: "B",
+                        location: "Application.handleMouseInput:captureRelease",
+                        message: "release to capture",
+                        data: [
+                            "capture": DebugSessionLog.typeName(capture),
+                            "pos": "\(pos.column),\(pos.line)",
+                        ]
+                    )
+                }
+                // #endregion
                 capture.handleMouseEvent(event)
                 if case .released = event.type {
                     window.mouseCapture = nil
@@ -335,6 +393,28 @@ public final class Application {
                 return false
             }
         }()
+
+        // #region agent log
+        switch event.type {
+        case .pressed, .released:
+            DebugSessionLog.write(
+                hypothesisId: "D",
+                location: "Application.handleMouseInput:click",
+                message: "mouse click path",
+                data: [
+                    "type": String(describing: event.type),
+                    "pos": "\(pos.column),\(pos.line)",
+                    "target": DebugSessionLog.typeName(target),
+                    "targetCanFocus": target?.canReceiveFocus ?? false,
+                    "frBefore": DebugSessionLog.typeName(window.firstResponder),
+                    "popupPresented": window.popupPresenter?.isPresented ?? false,
+                    "dismissOutside": shouldDismissPopup,
+                ]
+            )
+        default:
+            break
+        }
+        // #endregion
 
         window.setHoveredElement(target)
 
