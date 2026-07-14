@@ -1,11 +1,11 @@
 import Foundation
 
-extension Control {
+extension Element {
     /// Log the tree underneath the current control.
     /// ```
-    /// → VStackControl
-    ///   → TextControl
-    ///   → TextControl
+    /// → VStackElement
+    ///   → TextElement
+    ///   → TextElement
     /// ```
     func logTree() {
         log(treeDescription)

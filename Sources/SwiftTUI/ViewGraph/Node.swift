@@ -16,14 +16,52 @@ import Observation
 final class Node {
     var view: GenericView
 
-    var state: [String: Any] = [:]
-    var environment: ((inout EnvironmentValues) -> Void)?
+    /// Slot-indexed `@State` / `@FocusState` / `@Query` storage.
+    var state: [Int: Any] = [:]
+    /// Framework ephemeral keys (onChange, presentation, scroll proxy, query observers).
+    var storage: [String: Any] = [:]
+    var environment: ((inout EnvironmentValues) -> Void)? {
+        didSet { invalidateEnvironmentCache() }
+    }
+    /// Cached environment values for this node (invalidated when ancestor env changes).
+    var cachedEnvironment: EnvironmentValues?
+    var environmentCacheValid = false
 
-    var control: Control?
+    var element: Element?
     weak var application: Application?
 
+    func invalidateEnvironmentCache() {
+        environmentCacheValid = false
+        cachedEnvironment = nil
+        for child in children {
+            child.invalidateEnvironmentCache()
+        }
+    }
+
+    /// Resolve and cache `EnvironmentValues` for this node.
+    func resolvedEnvironment() -> EnvironmentValues {
+        if environmentCacheValid, let cachedEnvironment {
+            return cachedEnvironment
+        }
+        var transforms: [(inout EnvironmentValues) -> Void] = []
+        var current: Node? = self
+        while let c = current {
+            if let t = c.environment {
+                transforms.insert(t, at: 0)
+            }
+            current = c.parent
+        }
+        var env = EnvironmentValues()
+        for t in transforms {
+            t(&env)
+        }
+        cachedEnvironment = env
+        environmentCacheValid = true
+        return env
+    }
+
     /// For modifiers only, references to the controls
-    var controls: WeakSet<Control>?
+    var elements: WeakSet<Element>?
 
     private(set) weak var parent: Node?
     private(set) var children: [Node] = []
@@ -86,11 +124,19 @@ final class Node {
         }
     }
 
-    /// Observation `onChange` 在非隔离上下文触发；统一 hop 到 MainActor 再 invalidate。
+    /// Observation `onChange` is nonisolated. When already on the main thread
+    /// (typical during host commit), invalidate synchronously into the open
+    /// Transaction; otherwise hop with `Task`.
     private nonisolated static func scheduleInvalidate(_ node: Node?) {
         guard let node else { return }
-        Task { @MainActor in
-            node.root.application?.invalidateNode(node)
+        if Thread.isMainThread {
+            MainActor.assumeIsolated {
+                node.root.application?.invalidateNode(node)
+            }
+        } else {
+            Task { @MainActor in
+                node.root.application?.invalidateNode(node)
+            }
         }
     }
 
@@ -105,7 +151,7 @@ final class Node {
         }
         if built {
             for i in 0 ..< node.size {
-                insertControl(at: node.offset + i)
+                insertElement(at: node.offset + i)
             }
             root.application?.requestLayout()
         }
@@ -114,7 +160,7 @@ final class Node {
     func removeNode(at index: Int) {
         if built {
             for i in (0 ..< children[index].size).reversed() {
-                removeControl(at: children[index].offset + i)
+                removeElement(at: children[index].offset + i)
             }
             root.application?.requestLayout()
         }
@@ -127,18 +173,18 @@ final class Node {
 
     // MARK: - Container data source
 
-    func control(at offset: Int) -> Control {
+    func element(at offset: Int) -> Element {
         build()
-        if offset == 0, let control = self.control { return control }
+        if offset == 0, let element = self.element { return element }
         var i = 0
         for child in children {
             let size = child.size
             if (offset - i) < size {
-                let control = child.control(at: offset - i)
+                let element = child.element(at: offset - i)
                 if !(view is OptionalView), let modifier = self.view as? ModifierView {
-                    return modifier.passControl(control, node: self)
+                    return modifier.passElement(element, node: self)
                 }
-                return control
+                return element
             }
             i += size
         }
@@ -147,19 +193,19 @@ final class Node {
 
     // MARK: - Container changes
 
-    private func insertControl(at offset: Int) {
+    private func insertElement(at offset: Int) {
         if !(view is OptionalView), let container = view as? LayoutRootView {
-            container.insertControl(at: offset, node: self)
+            container.insertElement(at: offset, node: self)
             return
         }
-        parent?.insertControl(at: offset + self.offset)
+        parent?.insertElement(at: offset + self.offset)
     }
 
-    private func removeControl(at offset: Int) {
+    private func removeElement(at offset: Int) {
         if !(view is OptionalView), let container = view as? LayoutRootView {
-            container.removeControl(at: offset, node: self)
+            container.removeElement(at: offset, node: self)
             return
         }
-        parent?.removeControl(at: offset + self.offset)
+        parent?.removeElement(at: offset + self.offset)
     }
 }

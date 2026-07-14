@@ -10,6 +10,12 @@ import Foundation
 
     weak var renderer: Renderer?
 
+    /// Walk to the root layer — only the window root holds ``renderer``.
+    var rootRenderer: Renderer? {
+        if let renderer { return renderer }
+        return parent?.rootRenderer
+    }
+
     private var suppressFrameInvalidation = false
 
     var frame: Rect = .zero {
@@ -73,18 +79,21 @@ import Foundation
     }
 
     func draw(into buffer: inout ScreenBuffer) {
+        let absolute = Rect(position: frame.position + buffer.translation, size: frame.size)
+        if absolute.isEmpty || !absolute.intersects(buffer.clipRect) {
+            return
+        }
+
         buffer.saveState()
         buffer.translate(by: frame.position)
         buffer.clip(to: Rect(position: .zero, size: frame.size))
-        
-        // Draw layer content as background
+
         content?.draw(into: &buffer)
-        
-        // Draw children back-to-front
+
         for child in children {
             child.draw(into: &buffer)
         }
-        
+
         buffer.restoreState()
     }
 

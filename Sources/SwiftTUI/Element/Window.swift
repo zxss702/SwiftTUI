@@ -3,28 +3,28 @@ import Foundation
 @MainActor class Window: LayerDrawing {
     private(set) lazy var layer: Layer = makeLayer()
 
-    private(set) var controls: [Control] = []
+    private(set) var elements: [Element] = []
 
-    private(set) var firstResponder: Control?
+    private(set) var firstResponder: Element?
 
     /// 当前悬停叶控件；与 `firstResponder` / `mouseCapture` 同属窗口交互指针。
-    private(set) weak var hoveredControl: Control?
+    private(set) weak var hoveredElement: Element?
 
     /// 拖动手势等：按下后捕获 move/release，避免 hitTest 随光标漂移。
-    weak var mouseCapture: Control?
+    weak var mouseCapture: Element?
 
-    /// 应用级弹出层；由 `Application` 注入，供弹出菜单等 Control 回调使用。
+    /// 应用级弹出层；由 `Application` 注入，供弹出菜单等 Element 回调使用。
     weak var popupPresenter: PopupPresenter?
 
-    func addControl(_ control: Control) {
+    func addElement(_ control: Element) {
         control.window = self
-        self.controls.append(control)
+        self.elements.append(control)
         layer.addLayer(control.layer, at: 0)
     }
 
     /// Single entry for focus changes so `@FocusState` / `.focused` stay in sync.
-    func setFirstResponder(_ control: Control?) {
-        let next: Control?
+    func setFirstResponder(_ control: Element?) {
+        let next: Element?
         if let control, control.canReceiveFocus {
             next = control
         } else {
@@ -42,11 +42,11 @@ import Foundation
         next?.focusRegistration?.notifyBecomeFirstResponder()
     }
 
-    func setHoveredControl(_ control: Control?) {
-        guard hoveredControl !== control else { return }
+    func setHoveredElement(_ control: Element?) {
+        guard hoveredElement !== control else { return }
 
-        func ancestors(from control: Control?) -> [Control] {
-            var path: [Control] = []
+        func ancestors(from control: Element?) -> [Element] {
+            var path: [Element] = []
             var current = control
             while let node = current {
                 path.append(node)
@@ -55,7 +55,7 @@ import Foundation
             return path
         }
 
-        let oldPath = ancestors(from: hoveredControl)
+        let oldPath = ancestors(from: hoveredElement)
         let newPath = ancestors(from: control)
         let newIDs = Set(newPath.map { ObjectIdentifier($0) })
         let oldIDs = Set(oldPath.map { ObjectIdentifier($0) })
@@ -66,16 +66,16 @@ import Foundation
         for item in newPath.reversed() where !oldIDs.contains(ObjectIdentifier(item)) {
             item.isHovered = true
         }
-        hoveredControl = control
+        hoveredElement = control
     }
 
     /// 子树即将从控件树卸下时，释放指向该子树的交互指针（focus / hover / capture）。
     /// 必须在 `assignWindow(nil)` / `parent = nil` 之前调用，以便 leave 回调时视图仍挂树。
-    func resignInteraction(in subtree: Control) {
+    func resignInteraction(in subtree: Element) {
         if let focused = firstResponder,
            focused === subtree || focused.isDescendant(of: subtree) {
-            let fallback = controls.first?.firstSelectableElement
-            let next: Control?
+            let fallback = elements.first?.firstSelectableElement
+            let next: Element?
             if let fallback, !fallback.isDescendant(of: subtree), fallback !== subtree {
                 next = fallback
             } else {
@@ -84,9 +84,9 @@ import Foundation
             setFirstResponder(next)
         }
 
-        if let hovered = hoveredControl,
+        if let hovered = hoveredElement,
            hovered === subtree || hovered.isDescendant(of: subtree) {
-            setHoveredControl(nil)
+            setHoveredElement(nil)
         }
 
         if let capture = mouseCapture,

@@ -1,7 +1,7 @@
 import Foundation
 
 @MainActor
-public protocol LazyControl {
+public protocol LazyElement {
     /// Updates which children are materialized for the visible scroll window.
     /// Returns `true` if children changed and the control needs layout.
     @discardableResult
