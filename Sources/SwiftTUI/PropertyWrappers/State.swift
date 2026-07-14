@@ -12,23 +12,20 @@ import Foundation
         self.initialValue = wrappedValue
     }
 
-    /// @State variables can have a nonmutating setter, because they are just
-    /// a reference to state stored in a Node.
+    /// `@State` stores its value in the owning ViewGraph node (slot-based).
     var valueReference = StateReference()
 
     public var wrappedValue: T {
         get {
             guard let node = valueReference.node,
-                  let label = valueReference.label
+                  let slot = valueReference.slot
             else {
-                // 卸树后仍可能被 onHover 等异步路径读到；与 Binding 一致回退 initialValue。
                 return initialValue
             }
-            if let value = node.state[label] {
+            if let value = node.state[slot] {
                 return value as! T
             }
-            // 首次读取时写入 node.state，否则父视图刷新会丢掉引用类型状态（如 NavigationContext）
-            node.state[label] = initialValue
+            node.state[slot] = initialValue
             return initialValue
         }
         nonmutating set {
@@ -37,42 +34,37 @@ import Foundation
     }
 
     /// Framework use: write state without scheduling a node invalidation.
-    /// Used by GeometryReader to publish size during layout and sync-update children
-    /// in the same pass without kicking off an update storm.
     nonmutating func setValue(_ newValue: T, invalidate: Bool) {
         guard let node = valueReference.node,
-              let label = valueReference.label
+              let slot = valueReference.slot
         else {
-            // 导航卸树后悬停清除仍可能写入；静默忽略，勿 assertionFailure 崩进程。
             return
         }
-        node.state[label] = newValue
+        node.state[slot] = newValue
         if invalidate {
             node.root.application?.invalidateNode(node)
         }
     }
 
     public var projectedValue: Binding<T> {
-        // 通过 valueReference 捕获，避免 Binding 在 View 副本上失效；
-        // node 已释放时安全 no-op，避免 syncToBinding 时 assertion 闪退。
         let reference = valueReference
         let fallback = initialValue
         return Binding<T>(
             get: {
-                guard let node = reference.node, let label = reference.label else {
+                guard let node = reference.node, let slot = reference.slot else {
                     return fallback
                 }
-                if let value = node.state[label] as? T {
+                if let value = node.state[slot] as? T {
                     return value
                 }
-                node.state[label] = fallback
+                node.state[slot] = fallback
                 return fallback
             },
             set: { newValue in
-                guard let node = reference.node, let label = reference.label else {
+                guard let node = reference.node, let slot = reference.slot else {
                     return
                 }
-                node.state[label] = newValue
+                node.state[slot] = newValue
                 node.root.application?.invalidateNode(node)
             }
         )
@@ -80,10 +72,10 @@ import Foundation
 
     func seedInitialValueIfNeeded() {
         guard let node = valueReference.node,
-              let label = valueReference.label,
-              node.state[label] == nil
+              let slot = valueReference.slot,
+              node.state[slot] == nil
         else { return }
-        node.state[label] = initialValue
+        node.state[slot] = initialValue
     }
 }
 
@@ -92,7 +84,8 @@ import Foundation
     func seedInitialValueIfNeeded()
 }
 
-@MainActor class StateReference {
+@MainActor final class StateReference {
     weak var node: Node?
-    var label: String?
+    /// Declaration-order slot within the owning node (not Mirror label).
+    var slot: Int?
 }

@@ -1,6 +1,5 @@
 import Foundation
 
-/// Aligns with SwiftUI.FocusState (macOS 12+).
 @propertyWrapper
 @MainActor public struct FocusState<Value: Hashable>: AnyFocusState {
     let resetValue: Value
@@ -43,24 +42,24 @@ import Foundation
     }
 
     private static func read(reference: FocusStateReference, reset: Value) -> Value {
-        guard let node = reference.node, let label = reference.label else {
+        guard let node = reference.node, let slot = reference.slot else {
             return reset
         }
-        if let value = node.state[label] as? Value {
+        if let value = node.state[slot] as? Value {
             return value
         }
-        node.state[label] = reset
+        node.state[slot] = reset
         return reset
     }
 
     private static func write(_ newValue: Value, reference: FocusStateReference, reset: Value) {
-        guard let node = reference.node, let label = reference.label else {
+        guard let node = reference.node, let slot = reference.slot else {
             assertionFailure("Attempting to modify @FocusState before view is instantiated")
             return
         }
-        let previous = (node.state[label] as? Value) ?? reset
+        let previous = (node.state[slot] as? Value) ?? reset
         guard previous != newValue else { return }
-        node.state[label] = newValue
+        node.state[slot] = newValue
         node.root.application?.invalidateNode(node)
         if !FocusSystem.isSyncing {
             FocusSystem.apply(
@@ -97,7 +96,7 @@ extension FocusState {
 
 @MainActor final class FocusStateReference {
     weak var node: Node?
-    var label: String?
+    var slot: Int?
 }
 
 // MARK: - Focus system
@@ -111,7 +110,7 @@ enum FocusSystem {
     static func register(_ registration: FocusRegistration) {
         let key = ObjectIdentifier(registration.reference)
         var list = registrations[key] ?? []
-        list.removeAll { $0 === registration || $0.control == nil }
+        list.removeAll { $0 === registration || $0.element == nil }
         list.append(registration)
         registrations[key] = list
     }
@@ -132,10 +131,10 @@ enum FocusSystem {
     ) {
         guard let window else { return }
         let key = ObjectIdentifier(reference)
-        let list = (registrations[key] ?? []).filter { $0.control != nil }
+        let list = (registrations[key] ?? []).filter { $0.element != nil }
 
         if let match = list.first(where: { $0.matches(value) }),
-           let target = match.targetControl
+           let target = match.targetElement
         {
             window.setFirstResponder(target)
             return
@@ -146,7 +145,7 @@ enum FocusSystem {
            let reg = current.focusRegistration,
            reg.reference === reference
         {
-            let fallback = window.controls.first?.firstSelectableElement
+            let fallback = window.elements.first?.firstSelectableElement
             if fallback === current {
                 window.setFirstResponder(nil)
             } else {
@@ -159,26 +158,26 @@ enum FocusSystem {
 @MainActor
 final class FocusRegistration {
     let reference: FocusStateReference
-    weak var control: Control?
+    weak var element: Element?
     private let match: (Any) -> Bool
     private let writeFocused: () -> Void
     private let writeUnfocused: () -> Void
 
     init(
         reference: FocusStateReference,
-        control: Control,
+        control: Element,
         match: @escaping (Any) -> Bool,
         writeFocused: @escaping () -> Void,
         writeUnfocused: @escaping () -> Void
     ) {
         self.reference = reference
-        self.control = control
+        self.element = control
         self.match = match
         self.writeFocused = writeFocused
         self.writeUnfocused = writeUnfocused
     }
 
-    var targetControl: Control? { control }
+    var targetElement: Element? { element }
 
     func matches(_ value: Any) -> Bool {
         match(value)

@@ -35,13 +35,13 @@ import Foundation
     public var wrappedValue: T {
         get {
             guard let node = valueReference.node else {
-                assertionFailure("Attempting to access @Environment variable before view is instantiated")
+                // Detached / torn-down views can still be observed briefly; never trap the process.
                 if let kp = keyPath {
                     return EnvironmentValues()[keyPath: kp]
                 }
-                fatalError("Missing environment object of type \(T.self)")
+                fatalError("Attempting to access @Environment(\(T.self)) before view is instantiated")
             }
-            let environmentValues = makeEnvironment(node: node, transform: { _ in })
+            let environmentValues = node.resolvedEnvironment()
             if let kp = keyPath {
                 return environmentValues[keyPath: kp]
             } else {
@@ -52,19 +52,6 @@ import Foundation
             }
         }
         set {}
-    }
-
-    private func makeEnvironment(node: Node, transform: (inout EnvironmentValues) -> Void) -> EnvironmentValues {
-        if let parent = node.parent {
-            return makeEnvironment(node: parent) {
-                node.environment?(&$0)
-                transform(&$0)
-            }
-        }
-        var environmentValues = EnvironmentValues()
-        node.environment?(&environmentValues)
-        transform(&environmentValues)
-        return environmentValues
     }
 }
 

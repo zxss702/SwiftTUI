@@ -62,16 +62,30 @@ private final class JsonDataQueryObservationBox {
 }
 #endif
 
-/// Coalesces rapid observation callbacks into one MainActor pass.
+/// Coalesces rapid observation callbacks into one MainActor pass via ``HostClock``.
 @MainActor
 private final class QueryRefreshCoalescer {
-    private var pending: Task<Void, Never>?
+    private weak var application: Application?
+    private var workID: HostClock.WorkID?
+
+    init(application: Application?) {
+        self.application = application
+    }
 
     func schedule(_ work: @escaping @MainActor () -> Void) {
-        pending?.cancel()
-        pending = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(16))
-            guard !Task.isCancelled else { return }
+        if let clock = application?.clock {
+            if let id = workID {
+                clock.cancel(id)
+            }
+            workID = clock.schedule(after: 0.016) { [weak self] in
+                self?.workID = nil
+                work()
+            }
+            return
+        }
+        // Headless / no host yet: next MainActor turn.
+        Task { @MainActor in
+            await Task.yield()
             work()
         }
     }
@@ -120,44 +134,32 @@ public struct Query<Element: PersistentModel>: AnyState {
     public var wrappedValue: [Element] {
         get {
             guard let node = valueReference.node,
-                  let label = valueReference.label else {
+                  let slot = valueReference.slot else {
                 return []
             }
-            
-            // Build environment to get the ModelContext
-            var envValues = EnvironmentValues()
-            var current: Node? = node
-            
-            var transforms: [(inout EnvironmentValues) -> Void] = []
-            while let c = current {
-                if let t = c.environment {
-                    transforms.insert(t, at: 0)
-                }
-                current = c.parent
-            }
-            for t in transforms {
-                t(&envValues)
-            }
-            
+
+            let envValues = node.resolvedEnvironment()
             guard let context = envValues.modelContext else {
                 return []
             }
-            
-            let membershipKey = "\(label)_membership"
-            let coalescerKey = "\(label)_coalescer"
-            let obsKey = "\(label)_obs"
+
+            let membershipKey = "query.\(slot).membership"
+            let coalescerKey = "query.\(slot).coalescer"
+            let obsKey = "query.\(slot).obs"
             let descriptor = self.descriptor
 
-            if node.state[coalescerKey] == nil {
-                node.state[coalescerKey] = QueryRefreshCoalescer()
+            if node.storage[coalescerKey] == nil {
+                node.storage[coalescerKey] = QueryRefreshCoalescer(
+                    application: node.root.application
+                )
             }
 
             // Setup observation before serving cache so first empty fetch still watches saves.
-            if node.state[obsKey] == nil {
+            if node.storage[obsKey] == nil {
                 #if canImport(SwiftData)
                 installSwiftDataObserver(
                     node: node,
-                    label: label,
+                    slot: slot,
                     membershipKey: membershipKey,
                     coalescerKey: coalescerKey,
                     obsKey: obsKey,
@@ -167,7 +169,7 @@ public struct Query<Element: PersistentModel>: AnyState {
                 #else
                 installJsonDataMembershipObserver(
                     node: node,
-                    label: label,
+                    slot: slot,
                     membershipKey: membershipKey,
                     coalescerKey: coalescerKey,
                     obsKey: obsKey,
@@ -177,13 +179,13 @@ public struct Query<Element: PersistentModel>: AnyState {
                 #endif
             }
 
-            if let cached = node.state[label] as? [Element] {
+            if let cached = node.state[slot] as? [Element] {
                 return cached
             }
 
             let items = (try? context.fetch(descriptor)) ?? []
-            node.state[label] = items
-            node.state[membershipKey] = items.map(\.persistentModelID)
+            node.state[slot] = items
+            node.storage[membershipKey] = items.map(\.persistentModelID)
             return items
         }
         nonmutating set {
@@ -194,7 +196,7 @@ public struct Query<Element: PersistentModel>: AnyState {
     #if canImport(SwiftData)
     private func installSwiftDataObserver(
         node: Node,
-        label: String,
+        slot: Int,
         membershipKey: String,
         coalescerKey: String,
         obsKey: String,
@@ -234,12 +236,12 @@ public struct Query<Element: PersistentModel>: AnyState {
 
             Task { @MainActor in
                 guard let n = node,
-                      let coalescer = n.state[coalescerKey] as? QueryRefreshCoalescer
+                      let coalescer = n.storage[coalescerKey] as? QueryRefreshCoalescer
                 else { return }
                 coalescer.schedule {
                     Self.applySwiftDataSave(
                         node: n,
-                        label: label,
+                        slot: slot,
                         membershipKey: membershipKey,
                         descriptor: descriptor,
                         inserted: inserted,
@@ -250,12 +252,12 @@ public struct Query<Element: PersistentModel>: AnyState {
                 }
             }
         }
-        node.state[obsKey] = NotificationTokenBox(token)
+        node.storage[obsKey] = NotificationTokenBox(token)
     }
 
     private static func applySwiftDataSave(
         node: Node,
-        label: String,
+        slot: Int,
         membershipKey: String,
         descriptor: FetchDescriptor<Element>,
         inserted: Set<PersistentIdentifier>,
@@ -268,11 +270,11 @@ public struct Query<Element: PersistentModel>: AnyState {
         let membershipMayChange = !hasUserInfo || !inserted.isEmpty || !deleted.isEmpty
         if membershipMayChange {
             let newMembership = (try? ctx.fetchIdentifiers(descriptor)) ?? []
-            let previous = node.state[membershipKey] as? [PersistentIdentifier]
+            let previous = node.storage[membershipKey] as? [PersistentIdentifier]
             if previous != newMembership {
                 let items = (try? ctx.fetch(descriptor)) ?? []
-                node.state[label] = items
-                node.state[membershipKey] = newMembership
+                node.state[slot] = items
+                node.storage[membershipKey] = newMembership
                 node.root.application?.invalidateNode(node)
                 return
             }
@@ -283,47 +285,47 @@ public struct Query<Element: PersistentModel>: AnyState {
         // refresh. Cross-context SwiftData saves do not reliably fire Observation
         // on already-registered models without a fetch + view pass.
         guard !updated.isEmpty || !hasUserInfo else { return }
-        let cached = (node.state[label] as? [Element]) ?? []
+        let cached = (node.state[slot] as? [Element]) ?? []
         let cachedIDs = Set(cached.map(\.persistentModelID))
         let relevant = hasUserInfo ? updated.intersection(cachedIDs) : cachedIDs
         guard !relevant.isEmpty else { return }
 
         let items = (try? ctx.fetch(descriptor)) ?? cached
         let newMembership = items.map(\.persistentModelID)
-        if let previous = node.state[membershipKey] as? [PersistentIdentifier],
+        if let previous = node.storage[membershipKey] as? [PersistentIdentifier],
            previous != newMembership
         {
-            node.state[label] = items
-            node.state[membershipKey] = newMembership
+            node.state[slot] = items
+            node.storage[membershipKey] = newMembership
             node.root.application?.invalidateNode(node)
             return
         }
 
         // Same membership: replace element refs so ForEach can push updates;
         // MarkdownView.equatable() skips unchanged content.
-        node.state[label] = items
-        node.state[membershipKey] = newMembership
+        node.state[slot] = items
+        node.storage[membershipKey] = newMembership
         node.root.application?.invalidateNode(node)
     }
     #else
     private func installJsonDataMembershipObserver(
         node: Node,
-        label: String,
+        slot: Int,
         membershipKey: String,
         coalescerKey: String,
         obsKey: String,
         descriptor: FetchDescriptor<Element>,
         context: ModelContext
     ) {
-        let contextKey = "\(label)_ctx"
-        node.state[contextKey] = context
+        let contextKey = "query.\(slot).ctx"
+        node.storage[contextKey] = context
 
         let scheduleRefresh: @MainActor (Node) -> Void = { n in
-            guard let coalescer = n.state[coalescerKey] as? QueryRefreshCoalescer else { return }
+            guard let coalescer = n.storage[coalescerKey] as? QueryRefreshCoalescer else { return }
             coalescer.schedule {
                 Self.applyJsonDataMembership(
                     node: n,
-                    label: label,
+                    slot: slot,
                     membershipKey: membershipKey,
                     contextKey: contextKey,
                     descriptor: descriptor
@@ -357,7 +359,7 @@ public struct Query<Element: PersistentModel>: AnyState {
             }
         }
 
-        node.state[obsKey] = JsonDataQueryObservationBox(
+        node.storage[obsKey] = JsonDataQueryObservationBox(
             cancellable: cancellable,
             noteToken: noteToken
         )
@@ -370,30 +372,30 @@ public struct Query<Element: PersistentModel>: AnyState {
 
     private static func applyJsonDataMembership(
         node: Node,
-        label: String,
+        slot: Int,
         membershipKey: String,
         contextKey: String,
         descriptor: FetchDescriptor<Element>
     ) {
-        guard let ctx = node.state[contextKey] as? ModelContext else { return }
+        guard let ctx = node.storage[contextKey] as? ModelContext else { return }
 
         // includePendingChanges=true：本地 delete 未 save 也能从结果集消失。
         let items = (try? ctx.fetch(descriptor)) ?? []
         let newMembership = items.map(\.persistentModelID)
-        let previous = node.state[membershipKey] as? [PersistentIdentifier]
+        let previous = node.storage[membershipKey] as? [PersistentIdentifier]
 
         if previous != newMembership {
-            node.state[label] = items
-            node.state[membershipKey] = newMembership
+            node.state[slot] = items
+            node.storage[membershipKey] = newMembership
             // ForEach 行数变化需要 layout，否则 LazyVStack/ScrollView 尺寸滞后。
             node.root.application?.invalidateNode(node, layout: true)
             return
         }
 
         // ID 列表不变：刷新已缓存模型字段（行内 UPDATE）。
-        if let cached = node.state[label] as? [Element] {
+        if let cached = node.state[slot] as? [Element] {
             ctx.refreshCachedModels(ids: cached.map(\.persistentModelID))
-            node.state[label] = items
+            node.state[slot] = items
         }
     }
     #endif

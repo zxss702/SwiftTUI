@@ -16,4 +16,9 @@ import Foundation
     }
 
     public var projectedValue: Binding<T> { self }
+
+    /// Read-only binding that always returns `value` and ignores writes (SwiftUI-shaped).
+    public static func constant(_ value: T) -> Binding<T> {
+        Binding(get: { value }, set: { _ in })
+    }
 }

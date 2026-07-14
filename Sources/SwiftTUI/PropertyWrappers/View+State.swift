@@ -1,20 +1,21 @@
 import Foundation
 
 extension View {
+    /// Bind `@State` / `@FocusState` property wrappers to state slots on the node.
+    /// Slots are allocated by declaration order (not Mirror labels), matching SwiftUI
+    /// structural state identity.
     func setupStateProperties(node: Node) {
-        for (label, value) in Mirror(reflecting: self).children {
+        var slot = 0
+        for (_, value) in Mirror(reflecting: self).children {
             if let stateValue = value as? AnyState {
-                // Note: this is not how SwiftUI handles state.
-                // This will break if you initialize a View, and then use it
-                // multiple times, because we would be editing the same View.
                 stateValue.valueReference.node = node
-                stateValue.valueReference.label = label
-                // 用 init 里的 initialValue 种子化；已有值不覆盖（保留用户编辑）。
+                stateValue.valueReference.slot = slot
                 stateValue.seedInitialValueIfNeeded()
-            }
-            if let focusValue = value as? AnyFocusState {
+                slot += 1
+            } else if let focusValue = value as? AnyFocusState {
                 focusValue.valueReference.node = node
-                focusValue.valueReference.label = label
+                focusValue.valueReference.slot = slot
+                slot += 1
             }
         }
     }
