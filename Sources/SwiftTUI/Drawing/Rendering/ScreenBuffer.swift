@@ -74,19 +74,20 @@ struct ScreenBuffer {
                 character: cell.char,
                 style: VTStyle(foreground: fg, background: bg, attributes: vtAttrs)
             )
-        } else if cells != nil {
+        } else if var cells {
             let index = localPos.y * rect.size.width.intValue + localPos.x
-            guard index >= 0 && index < cells!.count else { return }
-            
-            if let existing = cells![index] {
+            guard index >= 0 && index < cells.count else { return }
+
+            if let existing = cells[index] {
                 var newCell = cell
                 if newCell.backgroundColor == nil {
                     newCell.backgroundColor = existing.backgroundColor
                 }
-                cells![index] = newCell
+                cells[index] = newCell
             } else {
-                cells![index] = cell
+                cells[index] = cell
             }
+            self.cells = cells
         }
     }
     
