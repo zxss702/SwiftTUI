@@ -64,11 +64,18 @@ struct AttributedTextTests {
         let app = Application(rootView: Text(attributed))
         try await app.testing_prepare(size: Size(width: 8, height: 3))
         let textEl = try #require(findTextElement(in: app.testing_rootElement, equalTo: "XY"))
-
-        var buffer = ScreenBuffer(
-            rect: Rect(position: .zero, size: textEl.layer.frame.size)
+        #expect(
+            Mirror(reflecting: textEl).children.contains { $0.label == "styledChars" },
+            "expected TextElement"
         )
-        textEl.draw(into: &buffer)
+
+        let paintSize = Size(width: 4, height: 1)
+        _ = textEl.size(proposedSize: paintSize)
+        textEl.layout(size: paintSize)
+        textEl.layer.setFrame(Rect(position: .zero, size: paintSize), invalidate: false)
+
+        var buffer = ScreenBuffer(rect: Rect(position: .zero, size: paintSize))
+        textEl.layer.draw(into: &buffer)
 
         let cell0 = try #require(buffer.cell(at: Position(column: 0, line: 0)))
         let cell1 = try #require(buffer.cell(at: Position(column: 1, line: 0)))
@@ -84,7 +91,7 @@ struct AttributedTextTests {
 @MainActor
 private func findTextElement(in control: Element?, equalTo target: String) -> Element? {
     guard let control else { return nil }
-    if textLabel(in: control) == target { return control }
+    if ownTextLabel(in: control) == target { return control }
     for child in control.children {
         if let found = findTextElement(in: child, equalTo: target) { return found }
     }
@@ -92,12 +99,6 @@ private func findTextElement(in control: Element?, equalTo target: String) -> El
 }
 
 @MainActor
-private func textLabel(in control: Element) -> String? {
-    if let text = Mirror(reflecting: control).children.first(where: { $0.label == "text" })?.value as? String {
-        return text
-    }
-    for child in control.children {
-        if let text = textLabel(in: child) { return text }
-    }
-    return nil
+private func ownTextLabel(in control: Element) -> String? {
+    Mirror(reflecting: control).children.first(where: { $0.label == "text" })?.value as? String
 }

@@ -51,7 +51,6 @@ import Foundation
         let previousLineLimit = control.lineLimit
         let previousTruncation = control.truncationMode
         let resolved = resolvedContent
-        let stylesChanged = control.styledChars != resolved.styles
         control.text = resolved.string
         control.styledChars = resolved.styles
         control.foregroundColor = foregroundColor
@@ -78,18 +77,7 @@ import Foundation
                 node.root.application?.requestLayout()
             }
         }
-        if stylesChanged || previousText != control.text {
-            control.layer.invalidate()
-        } else {
-            control.layer.invalidate()
-        }
-    }
-
-    private var displayString: String {
-        if #available(macOS 12, *), let attributedText {
-            return String(attributedText.characters)
-        }
-        return text ?? ""
+        control.layer.invalidate()
     }
 
     private var resolvedContent: (string: String, styles: [StyledChar]?) {
