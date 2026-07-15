@@ -146,6 +146,51 @@ import Foundation
             )
         }
 
+        /// Claim clicks only when attributed text contains link URLs.
+        override var claimsPointerCapture: Bool {
+            styledChars?.contains(where: { $0.linkURL != nil }) == true
+        }
+
+        override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+            guard claimsPointerCapture, event.button == .left else { return false }
+            let local = event.position - absoluteFrame.position
+            guard let urlString = linkURL(
+                atColumn: local.column.intValue,
+                line: local.line.intValue
+            ) else {
+                return false
+            }
+            if event.phase == .ended {
+                if let url = URL(string: urlString) {
+                    OpenURL.open(url)
+                } else {
+                    OpenURL.open(urlString)
+                }
+            }
+            return event.phase == .began || event.phase == .ended || event.phase == .moved
+        }
+
+        private func linkURL(atColumn column: Int, line: Int) -> String? {
+            guard line >= 0, line < cachedLines.count, column >= 0 else { return nil }
+            var currentWidth = 0
+            for unit in cachedLines[line].units {
+                let charWidth = max(unit.char.width, unit.char == "\t" ? 1 : 0)
+                if charWidth <= 0 { continue }
+                if column >= currentWidth && column < currentWidth + charWidth {
+                    guard let sourceIndex = unit.sourceIndex,
+                          let styledChars,
+                          sourceIndex >= 0,
+                          sourceIndex < styledChars.count
+                    else {
+                        return nil
+                    }
+                    return styledChars[sourceIndex].linkURL
+                }
+                currentWidth += charWidth
+            }
+            return nil
+        }
+
         override func draw(into buffer: inout ScreenBuffer) {
             let maxWidth = layer.frame.size.width.intValue
             let maxHeight = layer.frame.size.height.intValue
@@ -259,6 +304,7 @@ struct StyledChar: Equatable {
     var underline: Bool?
     var strikethrough: Bool?
     var inverted: Bool?
+    var linkURL: String?
 
     init(
         foreground: Color? = nil,
@@ -267,7 +313,8 @@ struct StyledChar: Equatable {
         italic: Bool? = nil,
         underline: Bool? = nil,
         strikethrough: Bool? = nil,
-        inverted: Bool? = nil
+        inverted: Bool? = nil,
+        linkURL: String? = nil
     ) {
         self.foreground = foreground
         self.background = background
@@ -276,6 +323,7 @@ struct StyledChar: Equatable {
         self.underline = underline
         self.strikethrough = strikethrough
         self.inverted = inverted
+        self.linkURL = linkURL
     }
 }
 
@@ -298,7 +346,8 @@ enum AttributedTextStyle {
                 italic: attrs[Attr.ItalicAttribute.self],
                 underline: attrs[Attr.UnderlineAttribute.self],
                 strikethrough: attrs[Attr.StrikethroughAttribute.self],
-                inverted: attrs[Attr.InvertedAttribute.self]
+                inverted: attrs[Attr.InvertedAttribute.self],
+                linkURL: attrs[Attr.LinkURLAttribute.self]
             )
             let count = attributed[run.range].characters.count
             for _ in 0 ..< count {
@@ -312,8 +361,13 @@ enum AttributedTextStyle {
 
 // MARK: - TextLayout
 
-enum TextLayout {
+public enum TextLayout {
     static let ellipsis = "…"
+
+    /// Public helper for siblings that need to match soft-wrap row heights.
+    public static func wrappedLineCount(for text: String, width: Int) -> Int {
+        max(1, wrap(text, width: max(width, 1)).count)
+    }
 
     struct LaidOutLine: Equatable {
         struct Unit: Equatable {

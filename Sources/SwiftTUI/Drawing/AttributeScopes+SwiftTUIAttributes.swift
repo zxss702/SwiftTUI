@@ -12,6 +12,7 @@ extension AttributeScopes {
         public let strikethrough = StrikethroughAttribute()
         public let underline = UnderlineAttribute()
         public let inverted = InvertedAttribute()
+        public let linkURL = LinkURLAttribute()
     }
 }
 
@@ -50,6 +51,12 @@ extension AttributeScopes.SwiftTUIAttributes {
     public struct InvertedAttribute: AttributedStringKey {
         public typealias Value = Bool
         public static let name = "Inverted"
+    }
+
+    /// Absolute URL / file URL string opened on tap within `Text`.
+    public struct LinkURLAttribute: AttributedStringKey {
+        public typealias Value = String
+        public static let name = "LinkURL"
     }
 }
 
