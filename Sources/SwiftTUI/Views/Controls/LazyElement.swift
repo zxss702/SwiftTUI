@@ -7,3 +7,10 @@ public protocol LazyElement {
     @discardableResult
     func updateVisibleRegion(offset: Extended, height: Extended) -> Bool
 }
+
+/// Lazy stacks that can resolve an `.id` to a content-Y offset without the
+/// row already being on-screen (ScrollViewReader).
+@MainActor
+protocol LazyIdentityOffsetProviding: AnyObject {
+    func contentLineOffset(forIdentity id: AnyHashable) -> Extended?
+}

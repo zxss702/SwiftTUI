@@ -65,14 +65,13 @@ public final class ScrollViewProxy {
     weak var bridge: ScrollToIdentityBridging?
 
     public func scrollTo<ID: Hashable>(_ id: ID, anchor: UnitPoint? = nil) {
-        _ = anchor
-        bridge?.scrollToIdentity(AnyHashable(id))
+        bridge?.scrollToIdentity(AnyHashable(id), anchor: anchor)
     }
 }
 
 @MainActor
 protocol ScrollToIdentityBridging: AnyObject {
-    func scrollToIdentity(_ id: AnyHashable)
+    func scrollToIdentity(_ id: AnyHashable, anchor: UnitPoint?)
 }
 
 @MainActor
@@ -134,13 +133,19 @@ private final class ScrollViewReaderElement: Element, ScrollToIdentityBridging {
         contentElement.layout(size: size)
     }
 
-    func scrollToIdentity(_ id: AnyHashable) {
-        guard let target = findIdentity(id, in: contentElement) else { return }
-        if let scroll = findScrollAncestor(of: target) {
-            scroll.scrollToIdentity(id)
-        } else {
-            // 无 ScrollView：尽量把目标滚进可见区
-            target.scroll(to: .zero)
+    func scrollToIdentity(_ id: AnyHashable, anchor: UnitPoint?) {
+        // Prefer a ScrollView that actually contains the target when it is
+        // already materialized.
+        if let target = findIdentity(id, in: contentElement),
+           let scroll = findScrollAncestor(of: target)
+        {
+            scroll.scrollToIdentity(id, anchor: anchor)
+            return
+        }
+        // Lazy / not yet loaded: find the enclosing ScrollView under this reader
+        // and let it resolve via estimated offsets.
+        if let scroll = findScrollDescendant(in: contentElement) {
+            scroll.scrollToIdentity(id, anchor: anchor)
         }
     }
 
@@ -162,8 +167,7 @@ private final class ScrollViewReaderElement: Element, ScrollToIdentityBridging {
             }
             current = c.parent
         }
-        // 也在子树里找 ScrollView（reader 包在外面时）
-        return findScrollDescendant(in: contentElement)
+        return nil
     }
 
     private func findScrollDescendant(in control: Element) -> ScrollToIdentityBridging? {
@@ -172,6 +176,35 @@ private final class ScrollViewReaderElement: Element, ScrollToIdentityBridging {
         }
         for child in control.children {
             if let found = findScrollDescendant(in: child) { return found }
+        }
+        return nil
+    }
+}
+
+// MARK: - Shared identity helpers
+
+@MainActor
+enum ScrollIdentityLookup {
+    static func findIdentity(_ id: AnyHashable, in control: Element) -> IdentityAnchorElement? {
+        if let anchor = control as? IdentityAnchorElement, anchor.id == id {
+            return anchor
+        }
+        for child in control.children {
+            if let found = findIdentity(id, in: child) { return found }
+        }
+        return nil
+    }
+
+    static func lazyContentOffset(for id: AnyHashable, in control: Element) -> Extended? {
+        if let lazy = control as? LazyIdentityOffsetProviding,
+           let offset = lazy.contentLineOffset(forIdentity: id)
+        {
+            return offset
+        }
+        for child in control.children {
+            if let offset = lazyContentOffset(for: id, in: child) {
+                return offset
+            }
         }
         return nil
     }

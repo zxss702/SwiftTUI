@@ -36,23 +36,61 @@ import Foundation
         var cachedContentSize: Size = .zero
         var contentOffset: Extended = 0
 
-        func scrollToIdentity(_ id: AnyHashable) {
-            guard let target = findIdentity(id, in: contentElement) else { return }
-            let absolute = target.absoluteFrame.position.line
-            let contentOrigin = contentElement.absoluteFrame.position.line
-            let destination = absolute - contentOrigin
-            contentOffset = destination
-            applyScrollOffset()
+        func scrollToIdentity(_ id: AnyHashable, anchor: UnitPoint?) {
+            let contentY: Extended
+            let targetHeight: Extended
+            if let target = ScrollIdentityLookup.findIdentity(id, in: contentElement) {
+                let contentOrigin = contentElement.absoluteFrame.position.line
+                contentY = target.absoluteFrame.position.line - contentOrigin
+                targetHeight = max(Extended(1), target.absoluteFrame.size.height)
+            } else if let estimated = ScrollIdentityLookup.lazyContentOffset(for: id, in: contentElement) {
+                contentY = estimated
+                targetHeight = 1
+            } else {
+                return
+            }
+
+            pendingScroll = PendingScroll(contentY: contentY, targetHeight: targetHeight, anchor: anchor)
+            // Avoid re-entering layout from `onAppear` / child layout callbacks.
+            if !isLayingOut {
+                applyPendingScroll()
+            }
         }
 
-        private func findIdentity(_ id: AnyHashable, in control: Element) -> IdentityAnchorElement? {
-            if let anchor = control as? IdentityAnchorElement, anchor.id == id {
-                return anchor
-            }
-            for child in control.children {
-                if let found = findIdentity(id, in: child) { return found }
-            }
-            return nil
+        private struct PendingScroll {
+            var contentY: Extended
+            var targetHeight: Extended
+            var anchor: UnitPoint?
+        }
+
+        private var pendingScroll: PendingScroll?
+        private var isLayingOut = false
+
+        private static func offset(
+            contentY: Extended,
+            targetHeight: Extended,
+            viewportHeight: Extended,
+            anchor: UnitPoint?
+        ) -> Extended {
+            // nil → top: put the target's top edge at the viewport top.
+            let a = anchor ?? .top
+            let span = viewportHeight - targetHeight
+            let shift = Extended(Int((a.y * Double(span.intValue)).rounded()))
+            return contentY - shift
+        }
+
+        private func applyPendingScroll() {
+            guard let pending = pendingScroll else { return }
+            let viewport = layer.frame.size.height
+            guard viewport > 0 else { return }
+            pendingScroll = nil
+            contentOffset = Self.offset(
+                contentY: pending.contentY,
+                targetHeight: pending.targetHeight,
+                viewportHeight: viewport,
+                anchor: pending.anchor
+            )
+            applyScrollOffset()
         }
 
         /// 默认占满全部高度，顶部对齐（对齐 SwiftUI）。
@@ -76,6 +114,11 @@ import Foundation
         }
 
         override func layout(size: Size) {
+            isLayingOut = true
+            defer {
+                isLayingOut = false
+                applyPendingScroll()
+            }
             super.layout(size: size)
             var contentSize = contentElement.size(proposedSize: Size(width: size.width, height: .infinity))
             // Viewport or content height may have changed (e.g. window resize);

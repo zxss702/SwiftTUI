@@ -60,7 +60,7 @@ import Foundation
         (node.element as! LazyVStackElement).handleRemove(at: index)
     }
 
-    private class LazyVStackElement: Element, LazyElement {
+    private class LazyVStackElement: Element, LazyElement, LazyIdentityOffsetProviding {
         var alignment: HorizontalAlignment
         var spacing: Extended
         var estimatedItemHeight: Extended
@@ -76,6 +76,34 @@ import Foundation
         /// Measured heights for items that have been laid out; kept across unload so
         /// scroll-back reuses the last known size until the next measure.
         private var measuredHeights: [Int: Extended] = [:]
+
+        func contentLineOffset(forIdentity id: AnyHashable) -> Extended? {
+            for (index, element) in loadedElements {
+                if Self.containsIdentity(id, in: element) {
+                    return position(for: index)
+                }
+            }
+            guard let contentNode, totalChildrenSize > 0 else { return nil }
+            // Probe unloaded slots. `element(at:)` builds without parenting into
+            // this stack; a later `updateVisibleRegion` remounts the same node.
+            for i in 0 ..< totalChildrenSize where loadedElements[i] == nil {
+                let element = contentNode.element(at: i)
+                if Self.containsIdentity(id, in: element) {
+                    return position(for: i)
+                }
+            }
+            return nil
+        }
+
+        private static func containsIdentity(_ id: AnyHashable, in control: Element) -> Bool {
+            if let anchor = control as? IdentityAnchorElement, anchor.id == id {
+                return true
+            }
+            for child in control.children {
+                if containsIdentity(id, in: child) { return true }
+            }
+            return false
+        }
 
         func clearCache() {
             unloadAllLoadedElements()
