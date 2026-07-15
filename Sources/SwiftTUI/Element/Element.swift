@@ -216,9 +216,43 @@ import Foundation
     var needsBindingCommit: Bool { false }
     func commitBindingIfNeeded() {}
 
+    /// Consume a mouse event at this node. Return `true` to stop top-down delivery.
+    /// Prefer ``pointerGesture(_:)`` for press/move/release click handling.
+    func consumeMouseEvent(_ event: MouseEvent) -> Bool { false }
+
+    /// UIKit-style pointer gesture after `Window` hit-tests the owner.
+    /// Return `true` when this node owns / handled the phase.
+    func pointerGesture(_ event: PointerGestureEvent) -> Bool { false }
+
+    /// Hit-test leaf, then climb to the pointer owner (Button / editor / …).
+    func pointerGestureTarget(at absolutePosition: Position) -> Element? {
+        guard let leaf = hitTest(position: absolutePosition) else { return nil }
+        return leaf.pointerTargetOnClick ?? leaf
+    }
+
+    /// Top-down mouse delivery: front-most child under the point first, then self.
+    /// Returns `true` when some node along the path handled the event.
+    @discardableResult
+    func dispatchMouseEvent(_ event: MouseEvent) -> Bool {
+        guard absoluteFrame.contains(event.position) else { return false }
+        for child in children.reversed() {
+            if child.dispatchMouseEvent(event) { return true }
+        }
+        return consumeMouseEvent(event)
+    }
+
+    /// Legacy entry: prefer ``consumeMouseEvent``; bubble only when this node ignores.
     func handleMouseEvent(_ event: MouseEvent) {
+        if consumeMouseEvent(event) { return }
         parent?.handleMouseEvent(event)
     }
+
+    /// Called when the window clears `mouseCapture` without delivering `.ended`
+    /// (dismiss-outside, retarget, subtree resign).
+    func pointerCaptureEnded() {}
+
+    /// Cancel an in-flight pointer gesture on this node.
+    func pointerGestureCancelled() {}
 
     func hitTest(position: Position) -> Element? {
         let localPosition = position - layer.frame.position
@@ -249,8 +283,15 @@ import Foundation
 
     var focusRegistration: FocusRegistration?
 
-    // MARK: - Selection
+    // MARK: - Selection (SwiftUI-shaped keyboard focus)
 
+    /// Whether this element may become `Window.firstResponder`.
+    ///
+    /// Aligns with SwiftUI: **only text-entry controls** (TextField / SecureField /
+    /// TextEditor) return `true`. Button, Toggle, Slider, Stepper, ScrollView,
+    /// Menu chrome, etc. stay `false` — they use ``claimsPointerCapture`` for
+    /// clicks, not keyboard focus. A focused control must show a soft caret
+    /// (`cursorPosition` while first responder).
     var selectable: Bool { false }
 
     var canReceiveFocus: Bool { selectable && focusableFlag }
@@ -261,6 +302,50 @@ import Foundation
             if let element = control.firstSelectableElement { return element }
         }
         return nil
+    }
+
+    /// Click / drag owner that is not a text first-responder (Button, Slider, …).
+    var claimsPointerCapture: Bool { false }
+
+    /// When `true`, Application keeps `mouseCapture` after a left press so moves
+    /// / release stay on this control (text drag, slider thumb).
+    ///
+    /// Press-activated Buttons leave this `false`: holding capture after the
+    /// action stole clicks from a Menu that just opened under the cursor.
+    var retainsPointerCaptureAfterPress: Bool { canReceiveFocus }
+
+    /// `HStack` / `VStack` padding may hit the stack; donate the first selectable
+    /// child (e.g. TextEditor). Root `ZStack` / overlay must leave this `false`.
+    var donatesDescendantPointerOnClick: Bool { false }
+
+    /// Pointer owner for a click that hit `self` (leaf Text, stack chrome, …).
+    var pointerTargetOnClick: Element? {
+        if claimsPointerCapture || canReceiveFocus { return self }
+        // Outer `.padding` / stack / frame chrome may donate to a *focusable
+        // editor* underneath (TextField border). It must NOT donate to a Button
+        // that is merely wrapped by those modifiers — only hits inside the
+        // Button's own subtree (label Text / inner padding) reach the Button
+        // via the ancestor walk below.
+        if donatesDescendantPointerOnClick,
+           let target = firstSelectableElement,
+           target.canReceiveFocus,
+           !target.claimsPointerCapture
+        {
+            return target
+        }
+        var current = parent
+        while let node = current {
+            if node.claimsPointerCapture || node.canReceiveFocus { return node }
+            current = node.parent
+        }
+        return nil
+    }
+
+    /// Keyboard focus target for the same click (`nil` if the pointer target
+    /// is click-only, e.g. a menu trigger that is not selectable).
+    var focusTargetOnClick: Element? {
+        guard let pointer = pointerTargetOnClick, pointer.canReceiveFocus else { return nil }
+        return pointer
     }
 
     // MARK: - Scrolling
