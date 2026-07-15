@@ -86,6 +86,54 @@ public struct Color: Hashable, Sendable {
     public static var gray: Color { .brightBlack }
 }
 
+extension Color {
+    /// Bridges to the VT layer color representation. Returns `nil` for the
+    /// terminal's default color (VT treats `nil` as "use default").
+    var vtColor: VTColor? {
+        switch data {
+        case .ansi(let color):
+            switch color.foregroundCode {
+            case 39:
+                return nil
+            case 30...37:
+                guard let ansi = VTANSIColor(rawValue: color.foregroundCode - 30) else { return nil }
+                return .ansi(ansi, intensity: .normal)
+            case 90...97:
+                guard let ansi = VTANSIColor(rawValue: color.foregroundCode - 90) else { return nil }
+                return .ansi(ansi, intensity: .bright)
+            default:
+                return nil
+            }
+        case .trueColor(let color):
+            return .rgb(
+                red: UInt8(clamping: color.red),
+                green: UInt8(clamping: color.green),
+                blue: UInt8(clamping: color.blue)
+            )
+        case .xterm(let color):
+            return Color.xterm256ToRGB(color.value)
+        }
+    }
+
+    /// Converts an xterm-256 palette index to its canonical RGB value.
+    private static func xterm256ToRGB(_ index: Int) -> VTColor? {
+        switch index {
+        case 16...231:
+            let value = index - 16
+            let levels: [UInt8] = [0, 95, 135, 175, 215, 255]
+            let red = levels[value / 36]
+            let green = levels[(value / 6) % 6]
+            let blue = levels[value % 6]
+            return .rgb(red: red, green: green, blue: blue)
+        case 232...255:
+            let gray = UInt8(8 + 10 * (index - 232))
+            return .rgb(red: gray, green: gray, blue: gray)
+        default:
+            return nil
+        }
+    }
+}
+
 struct ANSIColor: Hashable {
     let foregroundCode: Int
     let backgroundCode: Int

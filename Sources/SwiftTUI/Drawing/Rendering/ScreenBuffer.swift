@@ -91,6 +91,61 @@ struct ScreenBuffer {
         }
     }
     
+    /// Re-styles an already-drawn cell (text selection highlight): keeps the
+    /// character and attributes, swaps background (and optionally foreground).
+    mutating func highlightCell(at position: Position, background: Color, foreground: Color?) {
+        let finalPos = position + translation
+        guard clipRect.contains(finalPos) else { return }
+
+        let localPos = finalPos - rect.position
+        guard localPos.x >= 0, localPos.y >= 0,
+              localPos.x < rect.size.width.intValue, localPos.y < rect.size.height.intValue
+        else { return }
+
+        if let vt = vtRenderer {
+            let vtPos = VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)
+            let existing = vt.back[vtPos]
+            vt.back[vtPos] = VTCell(
+                character: existing.character,
+                style: VTStyle(
+                    foreground: foreground?.vtColor ?? existing.style.foreground,
+                    background: background.vtColor,
+                    attributes: existing.style.attributes
+                )
+            )
+        } else if var cells {
+            let index = localPos.y * rect.size.width.intValue + localPos.x
+            guard index >= 0 && index < cells.count else { return }
+            var cell = cells[index] ?? Cell(char: " ")
+            cell.backgroundColor = background
+            if let foreground { cell.foregroundColor = foreground }
+            cells[index] = cell
+            self.cells = cells
+        }
+    }
+
+    /// Reads the character already drawn at `position` (both VT and headless
+    /// paths). Returns `nil` when the position is clipped away. Wide-character
+    /// continuation cells report `\u{0000}`.
+    func character(at position: Position) -> Character? {
+        let finalPos = position + translation
+        guard clipRect.contains(finalPos) else { return nil }
+
+        let localPos = finalPos - rect.position
+        guard localPos.x >= 0, localPos.y >= 0,
+              localPos.x < rect.size.width.intValue, localPos.y < rect.size.height.intValue
+        else { return nil }
+
+        if let vt = vtRenderer {
+            let vtPos = VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)
+            return vt.back[vtPos].character
+        }
+        guard let cells else { return nil }
+        let index = localPos.y * rect.size.width.intValue + localPos.x
+        guard index >= 0 && index < cells.count else { return nil }
+        return cells[index]?.char
+    }
+
     func cell(at position: Position) -> Cell? {
         let finalPos = position + translation
         guard clipRect.contains(finalPos) else { return nil }
@@ -112,25 +167,6 @@ struct ScreenBuffer {
     }
     
     private func convertColor(_ color: Color) -> VTColor? {
-        switch color {
-        case .black: return .ansi(.black)
-        case .red: return .ansi(.red)
-        case .green: return .ansi(.green)
-        case .yellow: return .ansi(.yellow)
-        case .blue: return .ansi(.blue)
-        case .magenta: return .ansi(.magenta)
-        case .cyan: return .ansi(.cyan)
-        case .white: return .ansi(.white)
-        case .brightBlack: return .ansi(.black, intensity: .bright)
-        case .brightRed: return .ansi(.red, intensity: .bright)
-        case .brightGreen: return .ansi(.green, intensity: .bright)
-        case .brightYellow: return .ansi(.yellow, intensity: .bright)
-        case .brightBlue: return .ansi(.blue, intensity: .bright)
-        case .brightMagenta: return .ansi(.magenta, intensity: .bright)
-        case .brightCyan: return .ansi(.cyan, intensity: .bright)
-        case .brightWhite: return .ansi(.white, intensity: .bright)
-        case .default: return nil
-        default: return nil
-        }
+        color.vtColor
     }
 }
