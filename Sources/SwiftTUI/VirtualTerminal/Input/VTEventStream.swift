@@ -71,49 +71,27 @@ public struct VTEventStream: AsyncSequence, Sendable {
   public struct AsyncIterator: AsyncIteratorProtocol {
     private var iterator: AsyncThrowingStream<[VTEvent], Error>.Iterator
     private var buffer: [VTEvent] = []
-    private var index: Array<VTEvent>.Index?
+    private var offset: Int = 0
 
     internal init(underlying: AsyncThrowingStream<[VTEvent], Error>.Iterator) {
       self.iterator = underlying
     }
 
-    /// Advances to the next event in the stream.
-    ///
-    /// This method handles the complexity of managing batched events from
-    /// the underlying terminal input system. It maintains an internal buffer
-    /// to efficiently deliver individual events while minimizing system calls.
-    ///
-    /// The method automatically:
-    /// - Serves buffered events when available
-    /// - Fetches new batches when the buffer is exhausted
-    /// - Skips empty batches that may occur during input processing
-    /// - Returns `nil` when the stream reaches its end
-    ///
-    /// ## Error Propagation
-    /// Any errors from the underlying terminal input system are propagated
-    /// to the caller, allowing proper error handling in your application.
-    ///
-    /// - Returns: The next `VTEvent` in the stream, or `nil` if the stream
-    ///   has ended.
-    /// - Throws: Any errors that occur while reading from the terminal input.
     public mutating func next() async throws -> Element? {
-      if let index, index < buffer.endIndex {
-        let event = buffer[index]
-        self.index = buffer.index(after: index)
-        return event
+      while true {
+        if offset < buffer.count {
+          let event = buffer[offset]
+          offset += 1
+          return event
+        }
+
+        guard let batch = try await iterator.next() else {
+          return nil
+        }
+        buffer = VTEvent.coalescingMouseMoves(batch)
+        offset = 0
+        // Empty after coalesce (should be rare) — fetch again.
       }
-
-      while let batch = try await iterator.next() {
-        let coalesced = VTEvent.coalescingMouseMoves(batch)
-        guard !coalesced.isEmpty else { continue }
-
-        self.buffer = coalesced
-        self.index = buffer.index(after: buffer.startIndex)
-
-        return buffer[buffer.startIndex]
-      }
-
-      return nil
     }
   }
 

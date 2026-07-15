@@ -9,6 +9,26 @@ import Darwin
 @preconcurrency import Dispatch
 import Synchronization
 
+/// Process-wide stdin ownership. A prior ``POSIXTerminal``’s blocking `read`
+/// loop must not stay attached after the next `Application.start()` claims
+/// the TTY — otherwise History→Chat (and similar) sessions steal every-other
+/// press/key from the live pump.
+enum StdinReaderGate {
+  private static let generation = Mutex<UInt64>(0)
+
+  /// Invalidate any prior reader; return this session’s generation.
+  static func claim() -> UInt64 {
+    generation.withLock { value in
+      value &+= 1
+      return value
+    }
+  }
+
+  static func owns(_ gen: UInt64) -> Bool {
+    generation.withLock { $0 == gen }
+  }
+}
+
 /// POSIX/Unix terminal implementation using standard file descriptors.
 ///
 /// `POSIXTerminal` provides a cross-platform Unix/Linux implementation that
@@ -211,7 +231,16 @@ internal final actor POSIXTerminal: VTTerminal {
     signal(SIGWINCH, SIG_IGN)
     installCrashHandler()
 
-    self.input = VTEventStream(AsyncThrowingStream(bufferingPolicy: .bufferingNewest(64)) { [hIn, hOut] continuation in
+    // Unbounded: `.bufferingNewest(N)` drops *oldest* batches when the consumer
+    // is stuck in `present` while DECSET 1003 floods moves — that discarded
+    // keys/clicks and felt like every-other input. Moves are already coalesced
+    // per read; unbounded growth is bounded by present latency.
+    //
+    // Claim stdin so a prior session's reader exits (poll wakes) instead of
+    // stealing bytes from this Application (History → Chat reboot pattern).
+    let stdinGeneration = StdinReaderGate.claim()
+
+    self.input = VTEventStream(AsyncThrowingStream(bufferingPolicy: .unbounded) { [hIn, hOut] continuation in
       let sigwinchSource = DispatchSource.makeSignalSource(signal: SIGWINCH, queue: .main)
       sigwinchSource.setEventHandler {
         var ws = winsize()
@@ -224,15 +253,28 @@ internal final actor POSIXTerminal: VTTerminal {
       }
       sigwinchSource.resume()
 
-      continuation.onTermination = { @Sendable _ in
-        sigwinchSource.cancel()
-      }
-
-      Task {
+      let reader = Task {
         var parser = VTInputParser()
+        // #region agent log
+        var loggedFirstMotion = false
+        var loggedFirstPress = false
+        var rawMotionCount = 0
+        // #endregion
 
-        while !Task.isCancelled {
+        while !Task.isCancelled && StdinReaderGate.owns(stdinGeneration) {
           do {
+            // Poll so cancel / generation bump can stop a stuck `read`.
+            var pfd = pollfd(fd: hIn, events: Int16(POLLIN), revents: 0)
+            let pr = poll(&pfd, 1, 50)
+            if Task.isCancelled || !StdinReaderGate.owns(stdinGeneration) {
+              break
+            }
+            if pr < 0 {
+              if errno == EINTR { continue }
+              throw POSIXError()
+            }
+            if pr == 0 { continue }
+
             let events = try withUnsafeTemporaryAllocation(of: CChar.self, capacity: 128) {
               guard let baseAddress = $0.baseAddress else { throw POSIXError() }
               let count = read(hIn, baseAddress, $0.count)
@@ -280,6 +322,44 @@ internal final actor POSIXTerminal: VTTerminal {
                     default: return nil
                     }
                   }
+                  // #region agent log
+                  // onHover-before-first-click: record the very first raw motion
+                  // the tty ever delivers, and at the first press record how many
+                  // motions preceded it (0 ⇒ terminal muted 1003 until click).
+                  if isMotion, !isWheel {
+                    rawMotionCount += 1
+                    if !loggedFirstMotion {
+                      loggedFirstMotion = true
+                      var tv = timeval()
+                      gettimeofday(&tv, nil)
+                      let ts = Int(tv.tv_sec) * 1000 + Int(tv.tv_usec) / 1000
+                      let line =
+                        "{\"sessionId\":\"dde3c6\",\"hypothesisId\":\"H1\",\"location\":\"POSIXTerminal.mouse\",\"message\":\"first raw motion from tty\",\"timestamp\":\(ts),\"runId\":\"post-cleanup\",\"data\":{\"gen\":\(stdinGeneration),\"button\":\(button),\"col\":\(column),\"row\":\(row)}}\n"
+                      line.withCString { cstr in
+                        let path = "/Users/zhiyang/开发/Packges/SwiftTUI/.cursor/debug-dde3c6.log"
+                        if let fp = fopen(path, "a") {
+                          fputs(cstr, fp)
+                          fclose(fp)
+                        }
+                      }
+                    }
+                  }
+                  if !isMotion, !isWheel, kind == "M", !loggedFirstPress {
+                    loggedFirstPress = true
+                    var tv = timeval()
+                    gettimeofday(&tv, nil)
+                    let ts = Int(tv.tv_sec) * 1000 + Int(tv.tv_usec) / 1000
+                    let line =
+                      "{\"sessionId\":\"dde3c6\",\"hypothesisId\":\"H1\",\"location\":\"POSIXTerminal.mouse\",\"message\":\"first raw press from tty\",\"timestamp\":\(ts),\"runId\":\"post-cleanup\",\"data\":{\"gen\":\(stdinGeneration),\"motionsBeforePress\":\(rawMotionCount)}}\n"
+                    line.withCString { cstr in
+                      let path = "/Users/zhiyang/开发/Packges/SwiftTUI/.cursor/debug-dde3c6.log"
+                      if let fp = fopen(path, "a") {
+                        fputs(cstr, fp)
+                        fclose(fp)
+                      }
+                    }
+                  }
+                  // #endregion
                   let evt = MouseEvent(
                     position: Position(x: column - 1, y: row - 1),
                     type: mouseType
@@ -290,31 +370,42 @@ internal final actor POSIXTerminal: VTTerminal {
                 }
               }
             }
+            guard StdinReaderGate.owns(stdinGeneration) else { break }
             let coalesced = VTEvent.coalescingMouseMoves(events)
             if !coalesced.isEmpty {
               continuation.yield(coalesced)
             }
           } catch is CancellationError {
-            continuation.finish()
             break
           } catch {
             continuation.finish(throwing: error)
+            return
           }
         }
         continuation.finish()
       }
+
+      continuation.onTermination = { @Sendable _ in
+        sigwinchSource.cancel()
+        reader.cancel()
+      }
     })
 
     // Enable mouse reporting（Application.start 进入 1049 备用屏后还会再写一次）：
-    // 1003 = any-event tracking（未按键也会报 move，供 onHover）
-    // 1006 = SGR 坐标编码
+    // 1000 = base; 1002 = button-event; 1003 = any-event (onHover); 1006 = SGR
 #if canImport(Glibc)
+    _ = Glibc.write(self.hOut, "\u{1B}[?1000h", 8)
+    _ = Glibc.write(self.hOut, "\u{1B}[?1002h", 8)
     _ = Glibc.write(self.hOut, "\u{1B}[?1003h", 8)
     _ = Glibc.write(self.hOut, "\u{1B}[?1006h", 8)
 #elseif canImport(Musl)
+    _ = Musl.write(self.hOut, "\u{1B}[?1000h", 8)
+    _ = Musl.write(self.hOut, "\u{1B}[?1002h", 8)
     _ = Musl.write(self.hOut, "\u{1B}[?1003h", 8)
     _ = Musl.write(self.hOut, "\u{1B}[?1006h", 8)
 #else
+    _ = Darwin.write(self.hOut, "\u{1B}[?1000h", 8)
+    _ = Darwin.write(self.hOut, "\u{1B}[?1002h", 8)
     _ = Darwin.write(self.hOut, "\u{1B}[?1003h", 8)
     _ = Darwin.write(self.hOut, "\u{1B}[?1006h", 8)
 #endif
@@ -328,12 +419,18 @@ internal final actor POSIXTerminal: VTTerminal {
     // Disable mouse reporting
 #if canImport(Glibc)
     _ = Glibc.write(self.hOut, "\u{1B}[?1003l", 8)
+    _ = Glibc.write(self.hOut, "\u{1B}[?1002l", 8)
+    _ = Glibc.write(self.hOut, "\u{1B}[?1000l", 8)
     _ = Glibc.write(self.hOut, "\u{1B}[?1006l", 8)
 #elseif canImport(Musl)
     _ = Musl.write(self.hOut, "\u{1B}[?1003l", 8)
+    _ = Musl.write(self.hOut, "\u{1B}[?1002l", 8)
+    _ = Musl.write(self.hOut, "\u{1B}[?1000l", 8)
     _ = Musl.write(self.hOut, "\u{1B}[?1006l", 8)
 #else
     _ = Darwin.write(self.hOut, "\u{1B}[?1003l", 8)
+    _ = Darwin.write(self.hOut, "\u{1B}[?1002l", 8)
+    _ = Darwin.write(self.hOut, "\u{1B}[?1000l", 8)
     _ = Darwin.write(self.hOut, "\u{1B}[?1006l", 8)
 #endif
   }

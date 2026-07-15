@@ -300,7 +300,7 @@ extension VTInputParser {
       -> ParseResult<ParsedSequence> {
     guard let byte = input.first else { return .indeterminate }
     switch byte {
-    case 0x20 ... 0x2f, 0x3C: // intermediate bytes (0x3C '<' for SGR mouse)
+    case 0x20 ... 0x2f, 0x3C ... 0x3F: // intermediates + private markers ('<' SGR mouse, '?' DECRQM replies)
       state = .CSI(parameters: parameters, intermediate: intermediate + [byte])
       input = input.dropFirst()
       return parse( &input)

@@ -204,7 +204,8 @@ internal final actor WindowsTerminal: VTTerminal {
       throw WindowsError()
     }
 
-    self.input = VTEventStream(AsyncThrowingStream(bufferingPolicy: .bufferingNewest(64)) { [hIn, hOut] continuation in
+    // See POSIXTerminal: never drop key/click batches under mouse-move flood.
+    self.input = VTEventStream(AsyncThrowingStream(bufferingPolicy: .unbounded) { [hIn, hOut] continuation in
       Task {
         repeat {
           do {

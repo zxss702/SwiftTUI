@@ -6,9 +6,9 @@ enum EscapeSequence {
     static let enableAlternateBuffer = "\u{1b}[?1049h"
     static let disableAlternateBuffer = "\u{1b}[?1049l"
 
-    /// any-event mouse tracking + SGR encoding（供 onHover / 点击）
-    static let enableMouseTracking = "\u{1b}[?1003h\u{1b}[?1006h"
-    static let disableMouseTracking = "\u{1b}[?1003l\u{1b}[?1006l"
+    /// base + any-event mouse tracking + SGR encoding（供 onHover / 点击）
+    static let enableMouseTracking = "\u{1b}[?1000h\u{1b}[?1003h\u{1b}[?1006h"
+    static let disableMouseTracking = "\u{1b}[?1003l\u{1b}[?1000l\u{1b}[?1006l"
 
     static let showCursor = "\u{1b}[?25h"
     static let hideCursor = "\u{1b}[?25l"
