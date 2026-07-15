@@ -72,6 +72,11 @@ struct NavigationRootID: Hashable {
     /// NavigationBar 观察此值以在 toolbar 内容变化时刷新。
     var toolbarEpoch: Int = 0
 
+    /// Last page id that already published a toolbarEpoch bump this visit.
+    /// Prevents every keystroke body re-eval from bumping chrome (invalidate storm).
+    @ObservationIgnored
+    private var chromePublishedForPage: AnyHashable?
+
     /// 当前页 id
     var currentPageID: AnyHashable {
         stack.last ?? AnyHashable(NavigationRootID.shared)
@@ -115,6 +120,7 @@ struct NavigationRootID: Hashable {
 
     public func push<V: Hashable>(_ value: V) {
         stack.append(AnyHashable(value))
+        chromePublishedForPage = nil
         syncToBinding()
     }
 
@@ -122,6 +128,7 @@ struct NavigationRootID: Hashable {
         let key = AnyHashable(id)
         directDestinations[key] = destination
         stack.append(key)
+        chromePublishedForPage = nil
         syncToBinding()
     }
 
@@ -131,6 +138,7 @@ struct NavigationRootID: Hashable {
         directDestinations.removeValue(forKey: removed)
         titles.removeValue(forKey: removed)
         toolbars.removeValue(forKey: removed)
+        chromePublishedForPage = nil
         notifyChromeChange()
         syncToBinding()
         notifyItemBridges()
@@ -183,10 +191,13 @@ struct NavigationRootID: Hashable {
     }
 
     func setToolbar(_ content: NavigationToolbarContent, for id: AnyHashable) {
-        // Always replace slot views (AnyView identity); bump only for the top page
-        // so keep-alive pages re-registering cannot storm the bar.
+        // Always replace slot views (AnyView identity); bump chrome only once per
+        // page visit. Re-registering on every body eval (e.g. TextEditor @State)
+        // used to invalidate NavigationBar continuously.
         toolbars[id] = content
         guard id == currentPageID else { return }
+        guard chromePublishedForPage != id else { return }
+        chromePublishedForPage = id
         toolbarEpoch &+= 1
     }
 
@@ -226,6 +237,7 @@ struct NavigationRootID: Hashable {
         let newStack = pathSync.read()
         guard newStack != stack else { return }
         stack = newStack
+        chromePublishedForPage = nil
         notifyItemBridges()
     }
 

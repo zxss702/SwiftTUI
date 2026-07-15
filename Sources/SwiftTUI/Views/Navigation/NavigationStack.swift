@@ -131,15 +131,18 @@ private struct NavigationPage<Root: View>: View {
 
     var body: some View {
         let stack = context.stack
+        // Encode top-ness into ForEach elements so survivor equality sees
+        // `.hidden` flips when the path value itself is unchanged.
+        let pages = stack.map { KeepAlivePage(value: $0, isTop: $0 == stack.last) }
 
         ZStack {
             root
                 .hidden(!stack.isEmpty)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            ForEach(stack, id: \.self) { value in
-                pageView(for: value)
-                    .hidden(stack.last.map { $0 != value } ?? true)
+            ForEach(pages, id: \.value) { page in
+                pageView(for: page.value)
+                    .hidden(!page.isTop)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -153,4 +156,11 @@ private struct NavigationPage<Root: View>: View {
             EmptyView()
         }
     }
+}
+
+/// ForEach row for keep-alive pages. `isTop` is part of equality so a push that
+/// covers an existing page still updates that survivor's `.hidden` modifier.
+private struct KeepAlivePage: Hashable {
+    let value: AnyHashable
+    let isTop: Bool
 }

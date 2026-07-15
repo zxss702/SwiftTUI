@@ -20,7 +20,12 @@ final class PresentationRecord: Identifiable {
     /// 每次刷新重建面板，保证 Binding / 嵌套 present 能随状态更新。
     var makePanel: () -> AnyView
     var anchor: Rect
+    /// Cached during host `layout` — can be stale: root `ZStack(.center)` still
+    /// holds the previous overlay offset while children layout. Prefer
+    /// ``resolvedPanelFrame`` / `PopupPresenter.panelFrame` (live absolute).
     var panelFrame: Rect?
+    /// Panel root element; used for a live absolute frame after parent positions settle.
+    weak var panelElement: Element?
     let onDismiss: () -> Void
     /// 该层悬浮 Element，dismiss 后把焦点还给新的 top。
     weak var hostElement: Element?
@@ -47,6 +52,11 @@ final class PresentationRecord: Identifiable {
 
     var panel: AnyView { makePanel() }
 
+    /// Live panel bounds in window space (see `PopupPresenter.panelFrame`).
+    var resolvedPanelFrame: Rect? {
+        panelElement?.absoluteFrame ?? panelFrame
+    }
+
     var blocksUnderlyingHits: Bool {
         kind == .sheet || kind == .alert
     }
@@ -65,6 +75,10 @@ public final class PopupPresenter {
     @ObservationIgnored
     var needsPanelRefresh = false
 
+    /// First responder before the first present stole focus; restored when the stack empties.
+    @ObservationIgnored
+    weak var focusBeforePresentation: Element?
+
     /// 顶层 id（兼容旧逻辑 / modifier session）。
     var presentationID: UUID? { stack.last?.id }
 
@@ -77,8 +91,12 @@ public final class PopupPresenter {
         set { stack.last?.anchor = newValue }
     }
 
+    /// Window-absolute panel bounds for hit-testing / outside-dismiss.
+    /// Always derived from the live element tree when `panelElement` is set —
+    /// a frame cached mid-layout is wrong while ancestors still have the
+    /// previous centered overlay offset (item at ~16,9 vs stale ~35,16).
     var panelFrame: Rect? {
-        get { stack.last?.panelFrame }
+        get { stack.last?.resolvedPanelFrame }
         set { stack.last?.panelFrame = newValue }
     }
 
@@ -297,12 +315,23 @@ public final class PopupPresenter {
             stealFocus(control)
             return
         }
-        // 栈空时必须把焦点还给主界面；否则 firstResponder 仍停在已卸下的 sheet 控件上。
-        guard let window else { return }
+        // 栈空：优先还给 present 前的焦点（例如 TextEditor），避免总是跳到第一个 Button。
+        guard let window else {
+            focusBeforePresentation = nil
+            return
+        }
+        let restored = focusBeforePresentation
+        focusBeforePresentation = nil
         if let clock = window.layer.rootRenderer?.application?.clock {
             clock.scheduleNextTurn {
-                window.setFirstResponder(window.elements.first?.firstSelectableElement)
+                if let restored, restored.window === window, restored.canReceiveFocus {
+                    window.setFirstResponder(restored)
+                } else {
+                    window.setFirstResponder(window.elements.first?.firstSelectableElement)
+                }
             }
+        } else if let restored, restored.window === window, restored.canReceiveFocus {
+            window.setFirstResponder(restored)
         } else {
             window.setFirstResponder(window.elements.first?.firstSelectableElement)
         }
@@ -317,11 +346,17 @@ struct PopupOverlayHost: View {
 
     var body: some View {
         let _ = presenter.stack.map(\.id)
+        // Pass through misses: a presented menu sizes this ZStack to the window;
+        // default Element.hitTest returns `self` when children miss, which ate
+        // every click outside the panel ("first click works, then dead").
         ZStack(alignment: .topLeading) {
             ForEach(presenter.stack) { entry in
                 PresentationChrome(entry: entry, presenter: presenter)
             }
         }
+        // Window-sized ZStack must not absorb misses (otherwise Menu item /
+        // label clicks become `ZStackElement` with `pointer: nil`).
+        .hitTestPassthrough()
     }
 }
 
@@ -393,6 +428,7 @@ private struct FloatingPopupLayer: View, PrimitiveView {
         node.addNode(at: 0, Node(view: entry.makePanel().view))
         let control = FloatingPopupElement(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.panelElement = control.panelElement
         entry.hostElement = control
         node.element = control
         stealFocus(control)
@@ -407,6 +443,7 @@ private struct FloatingPopupLayer: View, PrimitiveView {
         control.entry = entry
         control.presenter = presenter
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.panelElement = control.panelElement
         entry.hostElement = control
         control.layer.invalidate()
     }
@@ -423,7 +460,9 @@ private final class FloatingPopupElement: Element {
         self.presenter = presenter
     }
 
-    override var selectable: Bool { true }
+    /// Presentation chrome is not a text first-responder; Escape is routed by
+    /// `Application` while presented.
+    override var selectable: Bool { false }
 
     override func size(proposedSize: Size) -> Size { proposedSize }
 
@@ -460,15 +499,16 @@ private final class FloatingPopupElement: Element {
             line = max(0, size.height - panelSize.height)
         }
         panelElement.layer.frame.position = Position(column: column, line: line)
-        entry.panelFrame = Rect(position: panelElement.layer.frame.position, size: panelSize)
+        // Window-absolute frame for Application.inPanel / hitTestPointer.
+        entry.panelFrame = panelElement.absoluteFrame
     }
 
     override func draw(into buffer: inout ScreenBuffer) {}
 
     override func hitTest(position: Position) -> Element? {
-        let local = position - layer.frame.position
+        // `position` is in parent-local coords (same as Element.hitTest).
         guard let panelElement else { return nil }
-        return panelElement.hitTest(position: local)
+        return panelElement.hitTest(position: position - layer.frame.position)
     }
 
     override func handleKeyEvent(_ event: KeyEvent) {
@@ -496,6 +536,7 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
         node.addNode(at: 0, Node(view: entry.makePanel().view))
         let control = PopoverFloatingElement(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.panelElement = control.panelElement
         entry.hostElement = control
         node.element = control
         stealFocus(control)
@@ -510,6 +551,7 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
         control.entry = entry
         control.presenter = presenter
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.panelElement = control.panelElement
         entry.hostElement = control
         control.layer.invalidate()
     }
@@ -526,7 +568,7 @@ private final class PopoverFloatingElement: Element {
         self.presenter = presenter
     }
 
-    override var selectable: Bool { true }
+    override var selectable: Bool { false }
     override func size(proposedSize: Size) -> Size { proposedSize }
 
     override func layout(size: Size) {
@@ -610,7 +652,7 @@ private final class PopoverFloatingElement: Element {
         }
 
         panelElement.layer.frame.position = Position(column: column, line: line)
-        entry.panelFrame = Rect(position: panelElement.layer.frame.position, size: panelSize)
+        entry.panelFrame = panelElement.absoluteFrame
     }
 
     override func draw(into buffer: inout ScreenBuffer) {}
@@ -645,6 +687,7 @@ private struct ModalFloatingLayer: View, PrimitiveView {
         node.addNode(at: 0, Node(view: entry.makePanel().view))
         let control = ModalFloatingElement(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.panelElement = control.panelElement
         entry.hostElement = control
         node.element = control
         stealFocus(control)
@@ -659,6 +702,7 @@ private struct ModalFloatingLayer: View, PrimitiveView {
         control.entry = entry
         control.presenter = presenter
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
+        entry.panelElement = control.panelElement
         entry.hostElement = control
         control.layer.invalidate()
     }
@@ -675,7 +719,7 @@ private final class ModalFloatingElement: Element {
         self.presenter = presenter
     }
 
-    override var selectable: Bool { true }
+    override var selectable: Bool { false }
     override func size(proposedSize: Size) -> Size { proposedSize }
 
     override func layout(size: Size) {
@@ -693,19 +737,18 @@ private final class ModalFloatingElement: Element {
         let column = max(0, (size.width - panelSize.width) / 2)
         let line = max(0, (size.height - panelSize.height) / 2)
         panelElement.layer.frame.position = Position(column: column, line: line)
-        entry.panelFrame = Rect(position: panelElement.layer.frame.position, size: panelSize)
+        entry.panelFrame = panelElement.absoluteFrame
     }
 
     override func draw(into buffer: inout ScreenBuffer) {
-        // 降低下层不透明度观感：只加 ANSI faint，不改前景/背景色
+        // Scrim: paint faint spaces over the full window. Do not read-modify
+        // underlying cells — on the VT path `cell(at:)` is unavailable, and
+        // mutating prior glyphs caused navigation/sheet dismiss residue.
+        var scrim = Cell(char: " ")
+        scrim.attributes.faint = true
         for y in 0 ..< layer.frame.size.height.intValue {
             for x in 0 ..< layer.frame.size.width.intValue {
-                let pos = Position(column: Extended(x), line: Extended(y))
-                guard var cell = buffer.cell(at: pos) else { continue }
-                if cell.char == "\0" { cell.char = " " }
-                cell.attributes.faint = true
-                cell.attributes.bold = false
-                buffer.setCell(cell, at: pos)
+                buffer.setCell(scrim, at: Position(column: Extended(x), line: Extended(y)))
             }
         }
     }
@@ -718,12 +761,23 @@ private final class ModalFloatingElement: Element {
         return self
     }
 
-    override func handleMouseEvent(_ event: MouseEvent) {
-        if case .released(.left) = event.type {
-            // 仅顶层遮罩响应外点关闭，避免嵌套时误关下层
-            guard presenter?.top?.id == entry.id else { return }
+    override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+        // Scrim / outside-panel: dismiss on gesture end (UIKit-style).
+        guard event.button == .left else { return false }
+        switch event.phase {
+        case .began, .moved:
+            return true
+        case .ended:
+            guard presenter?.top?.id == entry.id else { return false }
             presenter?.dismiss(id: entry.id)
+            return true
+        case .cancelled:
+            return true
         }
+    }
+
+    override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
+        false
     }
 
     override func handleKeyEvent(_ event: KeyEvent) {
@@ -741,13 +795,25 @@ private final class ModalFloatingElement: Element {
 @MainActor
 private func stealFocus(_ control: Element) {
     guard let window = control.window else { return }
-    let target = control.canReceiveFocus ? control : (control.firstSelectableElement ?? control)
+    // Remember pre-presentation text focus once per stack life. Presentation
+    // chrome itself is never firstResponder (SwiftUI-shaped: only text inputs).
+    if let presenter = window.popupPresenter,
+       presenter.focusBeforePresentation == nil,
+       let fr = window.firstResponder,
+       fr.canReceiveFocus,
+       !fr.isDescendant(of: control)
+    {
+        presenter.focusBeforePresentation = fr
+    }
+    // Move focus only when the sheet/popover contains a text field; menus leave
+    // FR alone (Application routes Escape / keys to the host while open).
+    guard let textInput = control.firstSelectableElement else { return }
     if let clock = window.layer.rootRenderer?.application?.clock {
         clock.scheduleNextTurn {
-            window.setFirstResponder(target)
+            window.setFirstResponder(textInput)
         }
     } else {
-        window.setFirstResponder(target)
+        window.setFirstResponder(textInput)
     }
 }
 
@@ -805,101 +871,3 @@ struct PopoverPanel<Content: View>: View {
     }
 }
 
-// MARK: - 触发按钮（回调绝对 frame + 自身 Node，便于叠层继承 Environment）
-
-@MainActor
-struct PopupAnchorButton<Label: View>: View, PrimitiveView {
-    let label: Label
-    let action: (Rect, Node) -> Void
-
-    static var size: Int? { 1 }
-
-    func buildNode(_ node: Node) {
-        node.addNode(at: 0, Node(view: VStack(content: label).view))
-        let control = PopupAnchorButtonElement { [weak node] anchor in
-            guard let node else { return }
-            action(anchor, node)
-        }
-        control.label = node.children[0].element(at: 0)
-        control.addSubview(control.label, at: 0)
-        node.element = control
-    }
-
-    func updateNode(_ node: Node) {
-        node.view = self
-        node.children[0].update(using: VStack(content: label).view)
-        let control = node.element as! PopupAnchorButtonElement
-        let newLabel = node.children[0].element(at: 0)
-        control.label = newLabel
-        control.syncChild(newLabel)
-        control.action = { [weak node] anchor in
-            guard let node else { return }
-            action(anchor, node)
-        }
-    }
-}
-
-@MainActor
-private final class PopupAnchorButtonElement: Element {
-    var action: (Rect) -> Void
-    var label: Element!
-    private weak var buttonLayer: AnchorButtonLayer?
-
-    init(action: @escaping (Rect) -> Void) {
-        self.action = action
-    }
-
-    override func size(proposedSize: Size) -> Size {
-        label.size(proposedSize: proposedSize)
-    }
-
-    override func layout(size: Size) {
-        super.layout(size: size)
-        label.layout(size: size)
-    }
-
-    override func handleEvent(_ char: Character) {
-        if char == "\n" || char == " " {
-            action(absoluteFrame)
-        }
-    }
-
-    override func handleMouseEvent(_ event: MouseEvent) {
-        if case .released(.left) = event.type {
-            action(absoluteFrame)
-        } else {
-            super.handleMouseEvent(event)
-        }
-    }
-
-    override func hoveredStateDidChange() {
-        buttonLayer?.highlighted = isHovered
-        layer.invalidate()
-    }
-
-    override func makeLayer() -> Layer {
-        let layer = AnchorButtonLayer()
-        buttonLayer = layer
-        return layer
-    }
-}
-
-@MainActor
-private final class AnchorButtonLayer: Layer {
-    var highlighted = false
-
-    override func draw(into buffer: inout ScreenBuffer) {
-        super.draw(into: &buffer)
-        if highlighted {
-            for y in 0 ..< frame.size.height.intValue {
-                for x in 0 ..< frame.size.width.intValue {
-                    let pos = Position(column: Extended(x), line: Extended(y))
-                    if var cell = buffer.cell(at: pos) {
-                        cell.attributes.inverted.toggle()
-                        buffer.setCell(cell, at: pos)
-                    }
-                }
-            }
-        }
-    }
-}

@@ -355,6 +355,7 @@ struct PopoverItemModifier<Content: View, Item: Identifiable, Presented: View>: 
     }
 }
 
+/// Thin layout host so popover anchor/`token` stay on a stable element identity.
 @MainActor
 private final class PopoverHostElement: Element {
     var contentElement: Element!
