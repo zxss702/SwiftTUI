@@ -128,16 +128,54 @@ struct NavigationPipelineTests {
         let app = Application(rootView: Root())
         try await app.testing_prepare()
         let rootBtn = try #require(findButtonLabeled("rootBtn", in: app.testing_rootElement))
+        // Buttons are not first-responders; setFirstResponder must reject them.
         app.window.setFirstResponder(rootBtn)
-        #expect(app.window.firstResponder === rootBtn)
+        #expect(app.window.firstResponder == nil)
 
         let go = try #require(findButtonLabeled("go", in: app.testing_rootElement))
         try await click(go, on: app)
 
-        if let focused = app.window.firstResponder {
-            #expect(!focused.isDescendant(of: rootBtn) && focused !== rootBtn)
-        }
         #expect(findButtonLabeled("detailBtn", in: app.testing_rootElement) != nil)
+        #expect(!app.hasPendingCommitWork)
+    }
+
+    /// Regression: ForEach used to skip updates when path values were unchanged,
+    /// so `.hidden(stack.last != value)` never flipped — middle keep-alive pages
+    /// kept painting over the top destination (Settings → 管理模型 → 编辑).
+    @Test func nestedPushHidesMiddleKeepAlivePage() async throws {
+        struct Root: View {
+            var body: some View {
+                NavigationStack {
+                    VStack {
+                        Text("rootUniqueMarker")
+                        NavigationLink("toMid", value: 1)
+                    }
+                    .navigationDestination(for: Int.self) { n in
+                        VStack {
+                            Text("page-\(n)")
+                            if n == 1 {
+                                NavigationLink("toLeaf", value: 2)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare()
+
+        try await click(try #require(findButtonLabeled("toMid", in: app.testing_rootElement)), on: app)
+        #expect(findText(in: app.testing_rootElement, equalTo: "page-1") != nil)
+
+        let toLeaf = try #require(findButtonLabeled("toLeaf", in: app.testing_rootElement))
+        try await click(toLeaf, on: app)
+        #expect(findText(in: app.testing_rootElement, equalTo: "page-2") != nil)
+
+        // Keep-alive mid page still mounts `toLeaf`, but hit-testing must miss it.
+        let midLink = try #require(findButtonLabeled("toLeaf", in: app.testing_rootElement))
+        let hit = app.testing_rootElement.hitTest(position: center(of: midLink))
+        #expect(hit !== midLink)
         #expect(!app.hasPendingCommitWork)
     }
 }

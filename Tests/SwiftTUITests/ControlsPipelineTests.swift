@@ -37,10 +37,14 @@ struct ControlsPipelineTests {
         }
         let app = Application(rootView: Root())
         try await app.testing_prepare()
-        // StepperElement is selectable — activate with '+' / space after focus.
+        // Stepper is click-only (not keyboard-focusable); click the "+" half.
         let stepper = try #require(findStepper(in: app.testing_rootElement))
-        app.window.setFirstResponder(stepper)
-        try await app.testing_turn(input: .key(KeyEvent(character: "+", keycode: 0, modifiers: [], type: .press)))
+        let frame = stepper.absoluteFrame
+        let plusPos = Position(
+            column: frame.position.column + max(Extended(0), frame.size.width - 1),
+            line: frame.position.line
+        )
+        try await app.testing_turn(input: .mouse(MouseEvent(position: plusPos, type: .pressed(.left))))
         #expect(findText(in: app.testing_rootElement, equalTo: "n=1") != nil)
         #expect(!app.hasPendingCommitWork)
     }
@@ -71,14 +75,16 @@ struct ControlsPipelineTests {
         final class Box { var text = "" }
         let box = Box()
         struct Root: View {
-            @State var text = ""
-            let box: Box
+            let binding: Binding<String>
             var body: some View {
-                let _ = { box.text = text }()
-                SecureField("pw", text: $text)
+                SecureField("pw", text: binding)
             }
         }
-        let app = Application(rootView: Root(box: box))
+        let binding = Binding(
+            get: { box.text },
+            set: { box.text = $0 }
+        )
+        let app = Application(rootView: Root(binding: binding))
         try await app.testing_prepare()
         let field = try #require(findTextField(in: app.testing_rootElement))
         app.window.setFirstResponder(field)

@@ -188,19 +188,21 @@ struct HostFrameTests {
         }
     }
 
-    @Test func spaceKeyActivatesButtonSameTurn() async throws {
+    /// Product rule: Buttons are pointer-activated, never keyboard firstResponder
+    /// (only TextField/SecureField/TextEditor take focus + caret).
+    @Test func buttonNeverBecomesFirstResponder() async throws {
         let box = TapBox()
         let app = Application(rootView: TapView(onCount: { box.taps = $0 }))
         try await app.testing_prepare()
 
         let button = try #require(findButton(in: app.testing_rootElement))
         app.window.setFirstResponder(button)
+        #expect(app.window.firstResponder == nil, "Button must not take keyboard focus")
+
         try await app.testing_turn(
             input: .key(KeyEvent(character: " ", keycode: 0, modifiers: [], type: .press))
         )
-        #expect(box.taps == 1)
-        #expect(textLabel(in: button) == "+1")
-        #expect(!app.hasPendingCommitWork)
+        #expect(box.taps == 0, "space must not activate an unfocused Button")
     }
 
     /// `onAppear` must apply in the same host settle as first layout — not on a
@@ -288,15 +290,22 @@ struct HostFrameTests {
         let scroll = VTEvent.mouse(MouseEvent(position: Position(x: 1, y: 1), type: .scroll(deltaX: 0, deltaY: 1)))
         let click = VTEvent.mouse(MouseEvent(position: Position(x: 1, y: 1), type: .pressed(.left)))
         let key = VTEvent.key(KeyEvent(character: "a", keycode: 0, modifiers: [], type: .press))
-        #expect(!HostEventPolicy.requiresInlineSettle(move))
-        #expect(HostEventPolicy.requiresInlineSettle(scroll))
-        #expect(HostEventPolicy.requiresInlineSettle(click))
-        #expect(HostEventPolicy.requiresInlineSettle(key))
+        #expect(!HostEventPolicy.shouldWakeFrameLoop(move))
+        #expect(HostEventPolicy.shouldWakeFrameLoop(scroll))
+        #expect(HostEventPolicy.shouldWakeFrameLoop(click))
+        #expect(HostEventPolicy.shouldWakeFrameLoop(key))
     }
 
     /// Settling every hover enter/leave burns commits — why move must not inline-settle.
+    /// Uses `Button(hover:)` + `@State` (default Button no longer paints on hover).
     @Test func alwaysSettlingHoverToggleBurnsCommits() async throws {
-        let app = Application(rootView: Button("hover-target") {})
+        struct HoverBurn: View {
+            @State var ticks = 0
+            var body: some View {
+                Button("hover-target", hover: { ticks += 1 }) {}
+            }
+        }
+        let app = Application(rootView: HoverBurn())
         try await app.testing_prepare()
         let button = try #require(findButton(in: app.testing_rootElement))
         let inside = center(of: button)
@@ -364,9 +373,9 @@ struct HostFrameTests {
         #expect(box.text == "z", "key starved after move storm — text=\(box.text.debugDescription)")
     }
 
-    @Test func scrollStillSettlesInline() async throws {
+    @Test func scrollWakesFrameLoop() async throws {
         #expect(
-            HostEventPolicy.requiresInlineSettle(
+            HostEventPolicy.shouldWakeFrameLoop(
                 .mouse(MouseEvent(position: Position(x: 0, y: 0), type: .scroll(deltaX: 0, deltaY: 1)))
             )
         )
