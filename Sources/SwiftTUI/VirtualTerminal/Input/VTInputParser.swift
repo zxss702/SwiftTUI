@@ -85,7 +85,7 @@ internal enum ParseResult<Output> {
 /// - Unknown or malformed sequences
 internal enum ParsedSequence {
   case character(Character)
-  case cursor(direction: Direction, count: Int)
+  case cursor(direction: Direction, count: Int, modifiers: KeyModifiers)
   case function(number: Int, modifiers: KeyModifiers)
   case mouse(button: Int, column: Int, row: Int, kind: Character)
   case unknown(sequence: [UInt8])
@@ -354,13 +354,13 @@ extension VTInputParser {
 
     return switch byte {
     case 0x41: // 'A'
-      .success(.cursor(direction: .up, count: 1), buffer: input)
+      .success(.cursor(direction: .up, count: 1, modifiers: []), buffer: input)
     case 0x42: // 'B'
-      .success(.cursor(direction: .down, count: 1), buffer: input)
+      .success(.cursor(direction: .down, count: 1, modifiers: []), buffer: input)
     case 0x43: // 'C'
-      .success(.cursor(direction: .right, count: 1), buffer: input)
+      .success(.cursor(direction: .right, count: 1, modifiers: []), buffer: input)
     case 0x44: // 'D'
-      .success(.cursor(direction: .left, count: 1), buffer: input)
+      .success(.cursor(direction: .left, count: 1, modifiers: []), buffer: input)
     default:
       .success(.unknown(sequence: [0x1b, 0x4f, byte]), buffer: input)
     }
@@ -428,18 +428,32 @@ extension VTInputParser {
     return (parameters, input)
   }
 
+  /// Decodes the xterm modifier parameter (`CSI 1;<mod> A`): value − 1 is a
+  /// bitmask of shift(1) / alt(2) / ctrl(4) / meta(8).
+  private func modifiers(fromXterm parameter: Int?) -> KeyModifiers {
+    guard let parameter, parameter >= 2 else { return [] }
+    let bits = parameter - 1
+    var result: KeyModifiers = []
+    if bits & 1 != 0 { result.insert(.shift) }
+    if bits & 2 != 0 { result.insert(.alt) }
+    if bits & 4 != 0 { result.insert(.ctrl) }
+    if bits & 8 != 0 { result.insert(.meta) }
+    return result
+  }
+
   private func parse(csi command: UInt8, parameters: [Int], intermediate: [UInt8])
       -> ParsedSequence {
     let count = parameters.first ?? 1
+    let mods = modifiers(fromXterm: parameters.count > 1 ? parameters[1] : nil)
     switch command {
     case 0x41:  // 'A' (CUU)
-      return .cursor(direction: .up, count: count)
+      return .cursor(direction: .up, count: count, modifiers: mods)
     case 0x42:  // 'B' (CUD)
-      return .cursor(direction: .down, count: count)
+      return .cursor(direction: .down, count: count, modifiers: mods)
     case 0x43:  // 'C' (CUF)
-      return .cursor(direction: .right, count: count)
+      return .cursor(direction: .right, count: count, modifiers: mods)
     case 0x44:  // 'D' (CUB)
-      return .cursor(direction: .left, count: count)
+      return .cursor(direction: .left, count: count, modifiers: mods)
     default:
       let sequence: [UInt8] = [UInt8(0x1b), UInt8(0x5b)] + parameters.flatMap { String($0).utf8 } + [UInt8(0x3b)] + intermediate + [command]
       return .unknown(sequence: sequence)
@@ -484,19 +498,19 @@ extension ParsedSequence {
         KeyEvent(character: character, keycode: 0, modifiers: [], type: .press)
       }
 
-    case let .cursor(direction, _):
+    case let .cursor(direction, _, modifiers):
       switch direction {
       case .up:
-        KeyEvent(character: nil, keycode: VTKeyCode.up, modifiers: [],
+        KeyEvent(character: nil, keycode: VTKeyCode.up, modifiers: modifiers,
                  type: .press)
       case .down:
-        KeyEvent(character: nil, keycode: VTKeyCode.down, modifiers: [],
+        KeyEvent(character: nil, keycode: VTKeyCode.down, modifiers: modifiers,
                  type: .press)
       case .left:
-        KeyEvent(character: nil, keycode: VTKeyCode.left, modifiers: [],
+        KeyEvent(character: nil, keycode: VTKeyCode.left, modifiers: modifiers,
                  type: .press)
       case .right:
-        KeyEvent(character: nil, keycode: VTKeyCode.right, modifiers: [],
+        KeyEvent(character: nil, keycode: VTKeyCode.right, modifiers: modifiers,
                  type: .press)
       }
 
