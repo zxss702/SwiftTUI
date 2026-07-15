@@ -364,15 +364,65 @@ import Foundation
 
             switch kind {
             case .header where pinnedViews.contains(.sectionHeaders):
+                // Only the section that owns the viewport top edge may stick.
+                // Otherwise every intersecting section's header collapses onto the same row.
+                guard isHeaderPinOwner(section, viewportTop: viewportTop, viewportBottom: viewportBottom) else {
+                    return natural
+                }
                 let maxY = max(section.startY, section.endY - h)
                 return min(max(natural, viewportTop), maxY)
             case .footer where pinnedViews.contains(.sectionFooters):
+                // Only the section that owns the viewport bottom edge may stick.
+                guard isFooterPinOwner(section, viewportTop: viewportTop, viewportBottom: viewportBottom) else {
+                    return natural
+                }
                 let minY = section.startY
                 let ideal = viewportBottom - h
                 return min(max(ideal, minY), natural)
             default:
                 return natural
             }
+        }
+
+        /// Section whose sticky header should occupy the top of the viewport.
+        private func isHeaderPinOwner(
+            _ section: SectionBand,
+            viewportTop: Extended,
+            viewportBottom: Extended
+        ) -> Bool {
+            guard section.headerIndex != nil else { return false }
+            // Prefer the last section that still covers the top edge (matches SwiftUI):
+            // while scrolling through a section, that section owns the top until it leaves.
+            let topRow = viewportTop
+            if let owner = sections.last(where: { $0.startY <= topRow && $0.endY > topRow }) {
+                return owner.headerIndex == section.headerIndex
+            }
+            // Fallback: last intersecting section.
+            if let owner = sections.last(where: {
+                $0.endY > viewportTop && $0.startY < viewportBottom && $0.headerIndex != nil
+            }) {
+                return owner.headerIndex == section.headerIndex
+            }
+            return false
+        }
+
+        /// Section whose sticky footer should occupy the bottom of the viewport.
+        private func isFooterPinOwner(
+            _ section: SectionBand,
+            viewportTop: Extended,
+            viewportBottom: Extended
+        ) -> Bool {
+            guard section.footerIndex != nil else { return false }
+            let bottomRow = max(viewportTop, viewportBottom - 1)
+            if let owner = sections.last(where: { $0.startY <= bottomRow && $0.endY > bottomRow }) {
+                return owner.footerIndex == section.footerIndex
+            }
+            if let owner = sections.last(where: {
+                $0.endY > viewportTop && $0.startY < viewportBottom && $0.footerIndex != nil
+            }) {
+                return owner.footerIndex == section.footerIndex
+            }
+            return false
         }
 
         // MARK: Visible region
@@ -423,15 +473,19 @@ import Foundation
 
             if startIndex > endIndex { return false }
 
-            // Force-load pinned chrome for sections intersecting the viewport.
+            // Force-load at most one sticky header and one sticky footer (viewport owners).
             var forcedChrome: Set<Int> = []
             for section in sections {
-                let intersects = section.endY > viewportTop && section.startY < viewportBottom
-                guard intersects else { continue }
-                if pinnedViews.contains(.sectionHeaders), let h = section.headerIndex {
+                if pinnedViews.contains(.sectionHeaders),
+                   let h = section.headerIndex,
+                   isHeaderPinOwner(section, viewportTop: viewportTop, viewportBottom: viewportBottom)
+                {
                     forcedChrome.insert(h)
                 }
-                if pinnedViews.contains(.sectionFooters), let f = section.footerIndex {
+                if pinnedViews.contains(.sectionFooters),
+                   let f = section.footerIndex,
+                   isFooterPinOwner(section, viewportTop: viewportTop, viewportBottom: viewportBottom)
+                {
                     forcedChrome.insert(f)
                 }
             }
