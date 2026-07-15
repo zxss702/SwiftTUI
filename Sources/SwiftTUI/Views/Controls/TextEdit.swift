@@ -140,6 +140,130 @@ private final class TextEditorElement: Element {
     private var lastBuiltWidth: Int = -1
     private var bindingDirty = false
 
+    // MARK: - Selection / undo state
+
+    /// Selection anchor; the head is `cursorIndex`.
+    private var selectionAnchor: String.Index?
+    /// Press location recorded on `.began`; becomes the anchor once a drag moves.
+    private var pendingSelectionOrigin: String.Index?
+
+    private struct UndoSnapshot {
+        var text: String
+        var cursorOffset: Int
+    }
+
+    /// Consecutive edits of the same group coalesce into one undo step.
+    private enum EditGroup {
+        case typing
+        case deleting
+    }
+
+    private var undoStack: [UndoSnapshot] = []
+    private var redoStack: [UndoSnapshot] = []
+    private var lastEditGroup: EditGroup?
+    /// Last character inserted while the `.typing` group is open (undo
+    /// word-boundary detection).
+    private var lastInsertedCharacter: Character?
+    private static let undoStackLimit = 100
+
+    /// Selected range (half-open), or `nil` when the selection is empty.
+    private var selectionRange: Range<String.Index>? {
+        guard let anchor = selectionAnchor, anchor != cursorIndex else { return nil }
+        return min(anchor, cursorIndex) ..< max(anchor, cursorIndex)
+    }
+
+    /// Collapse the selection without repainting (call sites invalidate).
+    private func collapseSelection() {
+        pendingSelectionOrigin = nil
+        guard selectionAnchor != nil else { return }
+        selectionAnchor = nil
+        window?.selectionCoordinator.end(self)
+    }
+
+    private func markSelectionActive() {
+        if selectionRange != nil {
+            window?.selectionCoordinator.begin(self)
+        }
+    }
+
+    /// Deletes the selected range (no undo recording — callers record).
+    /// Returns `true` when a selection was removed.
+    @discardableResult
+    private func removeSelectedText() -> Bool {
+        guard let range = selectionRange else { return false }
+        let distance = cachedText.distance(from: cachedText.startIndex, to: range.lowerBound)
+        cachedText.removeSubrange(range)
+        cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance)
+        collapseSelection()
+        return true
+    }
+
+    private func cutSelection() {
+        guard selectionRange != nil else { return }
+        if let text = selectedText() {
+            Clipboard.copy(text, vtRenderer: layer.rootRenderer?.vtRenderer)
+        }
+        applyTextMutation(undoGroup: nil) {
+            removeSelectedText()
+        }
+    }
+
+    // MARK: - Undo / redo
+
+    /// Push an undo snapshot unless it coalesces with the previous edit group.
+    /// Pass `nil` to force a snapshot (selection replace, cut, newline, tab, …);
+    /// `force` breaks coalescing within a group (word/CJK boundaries).
+    private func recordUndo(group: EditGroup?, force: Bool = false) {
+        redoStack.removeAll()
+        if force || group == nil || group != lastEditGroup {
+            let offset = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+            undoStack.append(UndoSnapshot(text: cachedText, cursorOffset: offset))
+            if undoStack.count > Self.undoStackLimit {
+                undoStack.removeFirst()
+            }
+        }
+        lastEditGroup = group
+    }
+
+    /// Whether inserting `char` starts a new undo step: CJK/emoji always do
+    /// (character granularity); Latin text breaks at word starts (previous
+    /// char was a space) and when switching back from wide characters.
+    private func typingUndoBoundary(for char: Character) -> Bool {
+        if char.undoesPerCharacter { return true }
+        guard let last = lastInsertedCharacter else { return false }
+        return last.undoesPerCharacter || (last == " " && char != " ")
+    }
+
+    private func performUndo() {
+        guard let snapshot = undoStack.popLast() else { return }
+        let offset = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+        redoStack.append(UndoSnapshot(text: cachedText, cursorOffset: offset))
+        restore(snapshot)
+    }
+
+    private func performRedo() {
+        guard let snapshot = redoStack.popLast() else { return }
+        let offset = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+        undoStack.append(UndoSnapshot(text: cachedText, cursorOffset: offset))
+        restore(snapshot)
+    }
+
+    private func restore(_ snapshot: UndoSnapshot) {
+        cachedText = snapshot.text
+        cursorIndex = cachedText.index(
+            cachedText.startIndex,
+            offsetBy: min(snapshot.cursorOffset, cachedText.count)
+        )
+        collapseSelection()
+        lastEditGroup = nil
+        needsRebuild = true
+        ensureVisualLines()
+        scrollToKeepCursorVisible()
+        bindingDirty = true
+        layer.invalidate()
+        layer.rootRenderer?.application?.noteEditorNeedsCommit(self)
+    }
+
     init(text: Binding<String>, isEnabled: Bool) {
         self.text = text
         self.isEnabledFlag = isEnabled
@@ -164,6 +288,9 @@ private final class TextEditorElement: Element {
         let newText = text.wrappedValue
         guard newText != cachedText else { return false }
         let distance = cachedText.distance(from: cachedText.startIndex, to: min(cursorIndex, cachedText.endIndex))
+        // Old-string indices must never survive onto the new string.
+        selectionAnchor = nil
+        pendingSelectionOrigin = nil
         cachedText = newText
         cursorIndex = cachedText.index(
             cachedText.startIndex,
@@ -286,32 +413,66 @@ private final class TextEditorElement: Element {
         let startLine = contentOffset.intValue
         let endLine = min(visualLines.count, startLine + height)
 
+        let selection = selectionRange
+
         for i in startLine..<endLine {
             let lineStr = visualLines[i]
             let y = i - startLine
             var x = 0
+            var index = lineRanges[i].lowerBound
             for char in lineStr {
+                let selected = selection?.contains(index) ?? false
                 let cw = char.width
                 if cw <= 0 {
                     // Tab / other ASCII controls report width 0; `1..<0` traps.
                     if char == "\t" {
-                        buffer.setCell(Cell(char: " "), at: Position(column: Extended(x), line: Extended(y)))
+                        var cell = Cell(char: " ")
+                        if selected {
+                            cell.backgroundColor = TextSelectionStyle.background
+                        }
+                        buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
                         x += 1
                     }
+                    index = cachedText.index(after: index)
                     continue
                 }
                 var cell = Cell(char: char)
                 if !isEnabledFlag { cell.attributes.faint = true }
+                if selected {
+                    cell.backgroundColor = TextSelectionStyle.background
+                    cell.foregroundColor = TextSelectionStyle.foreground
+                }
                 buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
                 if cw > 1 {
                     for w in 1..<cw {
-                        buffer.setCell(Cell(char: "\u{0000}"), at: Position(column: Extended(x + w), line: Extended(y)))
+                        var cont = Cell(char: "\u{0000}")
+                        if selected {
+                            cont.backgroundColor = TextSelectionStyle.background
+                            cont.foregroundColor = TextSelectionStyle.foreground
+                        }
+                        buffer.setCell(cont, at: Position(column: Extended(x + w), line: Extended(y)))
                     }
                 }
                 x += cw
+                index = cachedText.index(after: index)
             }
+            // A selected line break shows as one highlighted cell after the text.
+            let newlineSelected: Bool = {
+                guard let selection,
+                      index < lineRanges[i].upperBound,
+                      index < cachedText.endIndex,
+                      cachedText[index] == "\n"
+                else { return false }
+                return selection.contains(index)
+            }()
+            var isFirstPadding = true
             while x < width {
-                buffer.setCell(Cell(char: " "), at: Position(column: Extended(x), line: Extended(y)))
+                var cell = Cell(char: " ")
+                if newlineSelected, isFirstPadding {
+                    cell.backgroundColor = TextSelectionStyle.background
+                }
+                buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
+                isFirstPadding = false
                 x += 1
             }
         }
@@ -333,7 +494,12 @@ private final class TextEditorElement: Element {
         }
     }
 
-    private func applyTextMutation(_ mutate: () -> Void) {
+    private func applyTextMutation(
+        undoGroup: EditGroup?,
+        forceUndoSnapshot: Bool = false,
+        _ mutate: () -> Void
+    ) {
+        recordUndo(group: undoGroup, force: forceUndoSnapshot)
         mutate()
         needsRebuild = true
         ensureVisualLines()
@@ -344,7 +510,8 @@ private final class TextEditorElement: Element {
     }
 
     override var cursorPosition: Position? {
-        guard isFirstResponder, isEnabledFlag else { return nil }
+        // The caret hides while a selection is active (macOS behavior).
+        guard isFirstResponder, isEnabledFlag, selectionRange == nil else { return nil }
         ensureVisualLines()
         let pos = getVisualPosition(for: cursorIndex)
         let visualY = pos.line - contentOffset.intValue
@@ -357,9 +524,40 @@ private final class TextEditorElement: Element {
     override func handleKeyEvent(_ event: KeyEvent) {
         guard isEnabledFlag else { return }
         ensureVisualLines()
+        if event.isControl("x", raw: "\u{18}") {
+            cutSelection()
+            return
+        }
+        if event.isControl("z", raw: "\u{1a}") {
+            performUndo()
+            return
+        }
+        if event.isControl("y", raw: "\u{19}") {
+            performRedo()
+            return
+        }
         if event.character == nil {
             let keycode = event.keycode
             let pos = getVisualPosition(for: cursorIndex)
+            let shift = event.modifiers.contains(.shift)
+            lastEditGroup = nil
+
+            if shift, selectionAnchor == nil {
+                selectionAnchor = cursorIndex
+            }
+
+            if !shift, let range = selectionRange {
+                // Plain arrows collapse the selection to one end.
+                if keycode == VTKeyCode.left || keycode == VTKeyCode.up {
+                    cursorIndex = range.lowerBound
+                } else if keycode == VTKeyCode.right || keycode == VTKeyCode.down {
+                    cursorIndex = range.upperBound
+                }
+                collapseSelection()
+                scrollToKeepCursorVisible()
+                layer.invalidate()
+                return
+            }
 
             if keycode == VTKeyCode.left {
                 if cursorIndex > cachedText.startIndex {
@@ -382,6 +580,15 @@ private final class TextEditorElement: Element {
                     cursorIndex = cachedText.endIndex
                 }
             }
+            if shift {
+                if selectionAnchor == cursorIndex {
+                    collapseSelection()
+                } else {
+                    markSelectionActive()
+                }
+            } else {
+                collapseSelection()
+            }
             scrollToKeepCursorVisible()
             layer.invalidate()
             return
@@ -391,15 +598,22 @@ private final class TextEditorElement: Element {
         if char == "\u{03}" { return }
 
         if char == "\u{7F}" {
+            if selectionRange != nil {
+                applyTextMutation(undoGroup: nil) {
+                    removeSelectedText()
+                }
+                return
+            }
             guard cursorIndex > cachedText.startIndex else { return }
-            applyTextMutation {
+            applyTextMutation(undoGroup: .deleting) {
                 let prev = cachedText.index(before: cursorIndex)
                 let distance = cachedText.distance(from: cachedText.startIndex, to: prev)
                 cachedText.remove(at: prev)
                 cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance)
             }
         } else if char == "\n" || char == "\r" {
-            applyTextMutation {
+            applyTextMutation(undoGroup: nil) {
+                removeSelectedText()
                 let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
                 cachedText.insert("\n", at: cursorIndex)
                 cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
@@ -407,21 +621,30 @@ private final class TextEditorElement: Element {
         } else if char == "\t" {
             // Tab has Character.width == 0; inserting it crashes wide-char padding in draw.
             let spaces = "    "
-            applyTextMutation {
+            applyTextMutation(undoGroup: nil) {
+                removeSelectedText()
                 let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
                 cachedText.insert(contentsOf: spaces, at: cursorIndex)
                 cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + spaces.count)
             }
         } else if char.isASCII && char.isWhitespace && char != " " {
             return
+        } else if let ascii = char.asciiValue, ascii < 0x20 {
+            return
         } else if char.width == 0 {
             return
         } else {
-            applyTextMutation {
+            let hadSelection = selectionRange != nil
+            applyTextMutation(
+                undoGroup: hadSelection ? nil : .typing,
+                forceUndoSnapshot: !hadSelection && typingUndoBoundary(for: char)
+            ) {
+                removeSelectedText()
                 let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
                 cachedText.insert(char, at: cursorIndex)
                 cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
             }
+            lastInsertedCharacter = char
         }
     }
 
@@ -429,17 +652,33 @@ private final class TextEditorElement: Element {
         guard isEnabledFlag, event.button == .left else { return false }
         ensureVisualLines()
         switch event.phase {
-        case .began, .moved, .ended:
+        case .began:
+            if selectionAnchor != nil { collapseSelection() }
             placeCursor(at: event.position)
-            if event.phase == .began {
-                window?.mouseCapture = self
+            pendingSelectionOrigin = cursorIndex
+            lastEditGroup = nil
+            window?.mouseCapture = self
+            layer.invalidate()
+            return true
+        case .moved:
+            placeCursor(at: event.position)
+            if selectionAnchor == nil, let origin = pendingSelectionOrigin, origin != cursorIndex {
+                selectionAnchor = origin
             }
-            if event.phase == .ended, window?.mouseCapture === self {
+            markSelectionActive()
+            layer.invalidate()
+            return true
+        case .ended:
+            placeCursor(at: event.position)
+            if selectionAnchor == cursorIndex { collapseSelection() }
+            pendingSelectionOrigin = nil
+            if window?.mouseCapture === self {
                 window?.mouseCapture = nil
             }
             layer.invalidate()
             return true
         case .cancelled:
+            pendingSelectionOrigin = nil
             if window?.mouseCapture === self {
                 window?.mouseCapture = nil
             }
@@ -457,12 +696,17 @@ private final class TextEditorElement: Element {
             if contentOffset.intValue < 0 { contentOffset = 0 }
             if contentOffset.intValue > maxOffset { contentOffset = Extended(maxOffset) }
 
-            let pos = getVisualPosition(for: cursorIndex)
-            let frameHeight = layer.frame.size.height.intValue
-            if pos.line < contentOffset.intValue {
-                cursorIndex = getIndex(forVisualPosition: contentOffset.intValue, col: pos.col)
-            } else if pos.line >= contentOffset.intValue + frameHeight {
-                cursorIndex = getIndex(forVisualPosition: contentOffset.intValue + frameHeight - 1, col: pos.col)
+            // Keep the caret visible while wheel-scrolling — but not when a
+            // selection is active (the caret is the selection head and moving
+            // it would silently change the selection).
+            if selectionRange == nil {
+                let pos = getVisualPosition(for: cursorIndex)
+                let frameHeight = layer.frame.size.height.intValue
+                if pos.line < contentOffset.intValue {
+                    cursorIndex = getIndex(forVisualPosition: contentOffset.intValue, col: pos.col)
+                } else if pos.line >= contentOffset.intValue + frameHeight {
+                    cursorIndex = getIndex(forVisualPosition: contentOffset.intValue + frameHeight - 1, col: pos.col)
+                }
             }
             layer.invalidate()
             return true
@@ -473,8 +717,13 @@ private final class TextEditorElement: Element {
 
     private func placeCursor(at absolutePosition: Position) {
         let local = absolutePosition - absoluteFrame.position
-        let visualY = local.line.intValue + contentOffset.intValue
-        cursorIndex = getIndex(forVisualPosition: visualY, col: local.column.intValue)
+        // Clamp so dragging above/below the viewport keeps selecting line by
+        // line instead of jumping to endIndex.
+        let visualY = min(
+            max(0, local.line.intValue + contentOffset.intValue),
+            max(0, visualLines.count - 1)
+        )
+        cursorIndex = getIndex(forVisualPosition: visualY, col: max(0, local.column.intValue))
         scrollToKeepCursorVisible()
     }
 
@@ -485,6 +734,30 @@ private final class TextEditorElement: Element {
 
     override func resignFirstResponder() {
         super.resignFirstResponder()
+        collapseSelection()
         layer.invalidate()
+    }
+
+    override func willRemoveFromParent() {
+        window?.selectionCoordinator.end(self)
+        super.willRemoveFromParent()
+    }
+}
+
+// MARK: - SelectionOwner
+
+extension TextEditorElement: SelectionOwner {
+    func clearSelection() {
+        guard selectionAnchor != nil else {
+            pendingSelectionOrigin = nil
+            return
+        }
+        collapseSelection()
+        layer.invalidate()
+    }
+
+    func selectedText() -> String? {
+        guard let range = selectionRange else { return nil }
+        return String(cachedText[range])
     }
 }

@@ -192,6 +192,122 @@ final class TextFieldElement: Element {
     private var bindingDirty = false
     private var editGeneration: UInt64 = 0
 
+    // MARK: - Selection / undo state
+
+    /// Selection anchor (Character offset); the head is `cursorIndex`.
+    private var selectionAnchor: Int?
+    /// Press offset recorded on `.began`; becomes the anchor once a drag moves.
+    private var pendingSelectionOrigin: Int?
+
+    private struct UndoSnapshot {
+        var text: String
+        var cursor: Int
+    }
+
+    /// Consecutive edits of the same group coalesce into one undo step.
+    private enum EditGroup {
+        case typing
+        case deleting
+    }
+
+    private var undoStack: [UndoSnapshot] = []
+    private var redoStack: [UndoSnapshot] = []
+    private var lastEditGroup: EditGroup?
+    /// Last character inserted while the `.typing` group is open (undo
+    /// word-boundary detection).
+    private var lastInsertedCharacter: Character?
+    private static let undoStackLimit = 100
+
+    /// Selected character range (half-open), or `nil` when the selection is empty.
+    private var selectionRange: Range<Int>? {
+        guard let anchor = selectionAnchor, anchor != cursorIndex else { return nil }
+        return min(anchor, cursorIndex) ..< max(anchor, cursorIndex)
+    }
+
+    /// Collapse the selection without repainting (call sites invalidate).
+    private func collapseSelection() {
+        pendingSelectionOrigin = nil
+        guard selectionAnchor != nil else { return }
+        selectionAnchor = nil
+        window?.selectionCoordinator.end(self)
+    }
+
+    private func markSelectionActive() {
+        if selectionRange != nil {
+            window?.selectionCoordinator.begin(self)
+        }
+    }
+
+    /// Deletes the selected characters (no undo recording — callers record).
+    /// Returns `true` when a selection was removed.
+    @discardableResult
+    private func removeSelectedCharacters() -> Bool {
+        guard let range = selectionRange else { return false }
+        var chars = Array(cachedText)
+        chars.removeSubrange(range)
+        cachedText = String(chars)
+        cursorIndex = range.lowerBound
+        collapseSelection()
+        return true
+    }
+
+    private func cutSelection() {
+        guard selectionRange != nil else { return }
+        if let text = selectedText() {
+            Clipboard.copy(text, vtRenderer: layer.rootRenderer?.vtRenderer)
+        }
+        recordUndo(group: nil)
+        removeSelectedCharacters()
+        maskSecureImmediately()
+        stageLocalEdit()
+    }
+
+    // MARK: - Undo / redo
+
+    /// Push an undo snapshot unless it coalesces with the previous edit group.
+    /// Pass `nil` to force a snapshot (selection replace, cut, tab, …);
+    /// `force` breaks coalescing within a group (word/CJK boundaries).
+    private func recordUndo(group: EditGroup?, force: Bool = false) {
+        redoStack.removeAll()
+        if force || group == nil || group != lastEditGroup {
+            undoStack.append(UndoSnapshot(text: cachedText, cursor: cursorIndex))
+            if undoStack.count > Self.undoStackLimit {
+                undoStack.removeFirst()
+            }
+        }
+        lastEditGroup = group
+    }
+
+    /// Whether inserting `char` starts a new undo step: CJK/emoji always do
+    /// (character granularity); Latin text breaks at word starts (previous
+    /// char was a space) and when switching back from wide characters.
+    private func typingUndoBoundary(for char: Character) -> Bool {
+        if char.undoesPerCharacter { return true }
+        guard let last = lastInsertedCharacter else { return false }
+        return last.undoesPerCharacter || (last == " " && char != " ")
+    }
+
+    private func performUndo() {
+        guard let snapshot = undoStack.popLast() else { return }
+        redoStack.append(UndoSnapshot(text: cachedText, cursor: cursorIndex))
+        restore(snapshot)
+    }
+
+    private func performRedo() {
+        guard let snapshot = redoStack.popLast() else { return }
+        undoStack.append(UndoSnapshot(text: cachedText, cursor: cursorIndex))
+        restore(snapshot)
+    }
+
+    private func restore(_ snapshot: UndoSnapshot) {
+        cachedText = snapshot.text
+        cursorIndex = min(snapshot.cursor, cachedText.count)
+        collapseSelection()
+        lastEditGroup = nil
+        maskSecureImmediately()
+        stageLocalEdit()
+    }
+
     init(
         text: Binding<String>,
         placeholder: String,
@@ -237,6 +353,7 @@ final class TextFieldElement: Element {
         guard newText != cachedText else { return false }
         cachedText = newText
         cursorIndex = min(cursorIndex, cachedText.count)
+        collapseSelection()
         maskSecureImmediately()
         ensureCursorVisible()
         return true
@@ -261,6 +378,7 @@ final class TextFieldElement: Element {
 
     override func willRemoveFromParent() {
         cancelRevealTimer()
+        window?.selectionCoordinator.end(self)
         super.willRemoveFromParent()
     }
 
@@ -284,7 +402,15 @@ final class TextFieldElement: Element {
             return
         }
         if char == ASCII.DEL || char == "\u{7f}" {
+            if selectionRange != nil {
+                recordUndo(group: nil)
+                removeSelectedCharacters()
+                maskSecureImmediately()
+                stageLocalEdit()
+                return
+            }
             guard cursorIndex > 0 else { return }
+            recordUndo(group: .deleting)
             var chars = Array(cachedText)
             chars.remove(at: cursorIndex - 1)
             cachedText = String(chars)
@@ -294,6 +420,8 @@ final class TextFieldElement: Element {
             return
         }
         if char == "\t" {
+            recordUndo(group: nil)
+            removeSelectedCharacters()
             let spaces = Array("    ")
             var chars = Array(cachedText)
             chars.insert(contentsOf: spaces, at: cursorIndex)
@@ -303,7 +431,16 @@ final class TextFieldElement: Element {
             return
         }
         if char.isASCII && char.isWhitespace && char != " " { return }
+        if let ascii = char.asciiValue, ascii < 0x20 { return }
         if char.width == 0 { return }
+        if selectionRange != nil {
+            recordUndo(group: nil)
+            removeSelectedCharacters()
+        } else {
+            recordUndo(group: .typing, force: typingUndoBoundary(for: char))
+            collapseSelection()
+        }
+        lastInsertedCharacter = char
         var chars = Array(cachedText)
         chars.insert(char, at: cursorIndex)
         cachedText = String(chars)
@@ -317,22 +454,41 @@ final class TextFieldElement: Element {
 
     override func handleKeyEvent(_ event: KeyEvent) {
         guard isEnabledFlag else { return }
-        if event.keycode == VTKeyCode.left {
-            if cursorIndex > 0 {
-                cursorIndex -= 1
-                maskSecureImmediately()
-                ensureCursorVisible()
-                layer.invalidate()
-            }
+        if event.isControl("x", raw: "\u{18}") {
+            cutSelection()
             return
         }
-        if event.keycode == VTKeyCode.right {
-            if cursorIndex < cachedText.count {
-                cursorIndex += 1
-                maskSecureImmediately()
-                ensureCursorVisible()
-                layer.invalidate()
+        if event.isControl("z", raw: "\u{1a}") {
+            performUndo()
+            return
+        }
+        if event.isControl("y", raw: "\u{19}") {
+            performRedo()
+            return
+        }
+        if event.keycode == VTKeyCode.left || event.keycode == VTKeyCode.right {
+            let isLeft = event.keycode == VTKeyCode.left
+            lastEditGroup = nil
+            if event.modifiers.contains(.shift) {
+                if selectionAnchor == nil { selectionAnchor = cursorIndex }
+                if isLeft, cursorIndex > 0 { cursorIndex -= 1 }
+                if !isLeft, cursorIndex < cachedText.count { cursorIndex += 1 }
+                if selectionAnchor == cursorIndex {
+                    collapseSelection()
+                } else {
+                    markSelectionActive()
+                }
+            } else if let range = selectionRange {
+                cursorIndex = isLeft ? range.lowerBound : range.upperBound
+                collapseSelection()
+            } else {
+                if isLeft, cursorIndex > 0 { cursorIndex -= 1 }
+                if !isLeft, cursorIndex < cachedText.count { cursorIndex += 1 }
+                collapseSelection()
             }
+            maskSecureImmediately()
+            ensureCursorVisible()
+            layer.invalidate()
             return
         }
         super.handleKeyEvent(event)
@@ -340,16 +496,37 @@ final class TextFieldElement: Element {
 
     override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
         guard isEnabledFlag, event.button == .left else { return false }
+        let local = event.position - absoluteFrame.position
+        let col = max(0, local.column.intValue)
         switch event.phase {
-        case .began, .ended:
-            let local = event.position - absoluteFrame.position
-            let col = max(0, local.column.intValue)
+        case .began:
+            if selectionAnchor != nil { collapseSelection() }
             cursorIndex = indexForVisibleColumn(col)
+            pendingSelectionOrigin = cursorIndex
+            lastEditGroup = nil
             maskSecureImmediately()
             ensureCursorVisible()
             layer.invalidate()
             return true
-        case .moved, .cancelled:
+        case .moved:
+            cursorIndex = indexForVisibleColumn(col)
+            if selectionAnchor == nil, let origin = pendingSelectionOrigin, origin != cursorIndex {
+                selectionAnchor = origin
+            }
+            markSelectionActive()
+            ensureCursorVisible()
+            layer.invalidate()
+            return true
+        case .ended:
+            cursorIndex = indexForVisibleColumn(col)
+            if selectionAnchor == cursorIndex { collapseSelection() }
+            pendingSelectionOrigin = nil
+            maskSecureImmediately()
+            ensureCursorVisible()
+            layer.invalidate()
+            return true
+        case .cancelled:
+            pendingSelectionOrigin = nil
             return false
         }
     }
@@ -359,7 +536,8 @@ final class TextFieldElement: Element {
     }
 
     override var cursorPosition: Position? {
-        guard isFirstResponder, isEnabledFlag else { return nil }
+        // The caret hides while a selection is active (macOS behavior).
+        guard isFirstResponder, isEnabledFlag, selectionRange == nil else { return nil }
         let cursorCol = columnOffset(upTo: cursorIndex)
         let visible = cursorCol - scrollOffset
         let width = max(1, layer.frame.size.width.intValue)
@@ -400,8 +578,20 @@ final class TextFieldElement: Element {
         } else {
             ensureCursorVisible()
             let slice = visibleSlice(of: display, window: width)
-            drawString(slice, at: 0, color: color, faint: false, into: &buffer, maxWidth: width)
+            drawString(
+                slice, at: 0, color: color, faint: false, into: &buffer, maxWidth: width,
+                highlightColumns: selectedDisplayColumns, columnBase: scrollOffset
+            )
         }
+    }
+
+    /// Selected range converted to absolute display columns (half-open).
+    private var selectedDisplayColumns: Range<Int>? {
+        guard let range = selectionRange else { return nil }
+        let lower = columnOffset(upTo: range.lowerBound)
+        let upper = columnOffset(upTo: range.upperBound)
+        guard lower < upper else { return nil }
+        return lower ..< upper
     }
 
     override func becomeFirstResponder() {
@@ -411,6 +601,7 @@ final class TextFieldElement: Element {
 
     override func resignFirstResponder() {
         super.resignFirstResponder()
+        collapseSelection()
         maskSecureImmediately()
         layer.invalidate()
     }
@@ -528,15 +719,22 @@ final class TextFieldElement: Element {
         color: Color,
         faint: Bool,
         into buffer: inout ScreenBuffer,
-        maxWidth: Int
+        maxWidth: Int,
+        highlightColumns: Range<Int>? = nil,
+        columnBase: Int = 0
     ) {
         var currentWidth = startCol
         for ch in string {
+            let selected = highlightColumns?.contains(columnBase + currentWidth) ?? false
             let charWidth = ch.width
             if charWidth <= 0 {
                 if ch == "\t", currentWidth < maxWidth {
                     var cell = Cell(char: " ", foregroundColor: color)
                     cell.attributes.faint = faint
+                    if selected {
+                        cell.backgroundColor = TextSelectionStyle.background
+                        cell.foregroundColor = TextSelectionStyle.foreground
+                    }
                     buffer.setCell(cell, at: Position(column: Extended(currentWidth), line: 0))
                     currentWidth += 1
                 }
@@ -546,15 +744,43 @@ final class TextFieldElement: Element {
             if currentWidth + charWidth > maxWidth { break }
             var cell = Cell(char: ch, foregroundColor: color)
             cell.attributes.faint = faint
+            if selected {
+                cell.backgroundColor = TextSelectionStyle.background
+                cell.foregroundColor = TextSelectionStyle.foreground
+            }
             buffer.setCell(cell, at: Position(column: Extended(currentWidth), line: 0))
             if charWidth > 1 {
                 for w in 1 ..< charWidth {
                     var cont = Cell(char: "\u{0000}", foregroundColor: color)
                     cont.attributes.faint = faint
+                    if selected {
+                        cont.backgroundColor = TextSelectionStyle.background
+                        cont.foregroundColor = TextSelectionStyle.foreground
+                    }
                     buffer.setCell(cont, at: Position(column: Extended(currentWidth + w), line: 0))
                 }
             }
             currentWidth += charWidth
         }
+    }
+}
+
+// MARK: - SelectionOwner
+
+extension TextFieldElement: SelectionOwner {
+    func clearSelection() {
+        guard selectionAnchor != nil else {
+            pendingSelectionOrigin = nil
+            return
+        }
+        collapseSelection()
+        layer.invalidate()
+    }
+
+    func selectedText() -> String? {
+        guard let range = selectionRange else { return nil }
+        let chars = Array(cachedText)
+        guard range.lowerBound >= 0, range.upperBound <= chars.count else { return nil }
+        return String(chars[range])
     }
 }

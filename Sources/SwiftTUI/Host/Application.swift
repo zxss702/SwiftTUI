@@ -363,6 +363,15 @@ public final class Application {
         guard event.type == .press else { return }
 
         if (event.character == "c" && event.modifiers.contains(.ctrl)) || event.character == "\u{03}" {
+            // With an active selection Ctrl+C copies; without one the original
+            // behavior (quit) is untouched.
+            if let owner = window.selectionCoordinator.activeOwner,
+               let text = owner.selectedText(), !text.isEmpty
+            {
+                Clipboard.copy(text, vtRenderer: vtRenderer)
+                window.selectionCoordinator.clearActiveSelection()
+                return
+            }
             stop()
             return
         }
@@ -428,6 +437,9 @@ public final class Application {
 
         switch event.type {
         case .pressed(let button):
+            // A press anywhere cancels the active text selection (macOS-like);
+            // dragging afterwards may immediately start a new one.
+            window.selectionCoordinator.clearActiveSelection()
             // UIKit: hitTest → began. Same-target re-press keeps the session
             // (terminal sometimes repeats press without release); otherwise cancel.
             let target = rootElement.pointerGestureTarget(at: pos)
