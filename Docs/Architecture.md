@@ -30,8 +30,9 @@ Two MainActor tasks:
 ### `dispatchTerminalEvent`
 
 - Always `handleTerminalEvent`
-- **Inline `settleHost`** for key / click / scroll / resize (`HostEventPolicy.requiresInlineSettle`)
-- **Mouse-move only** marks dirty + `scheduleUpdate` (DECSET 1003 must not block the pump)
+- **Never** await `settleHost` / present on the input task (terminal present is slow and freezes the pump)
+- Key / click / scroll / resize → `scheduleUpdate` (`HostEventPolicy.shouldWakeFrameLoop`)
+- Mouse-move → wake only if commit work is already pending (DECSET 1003 flood)
 
 ### `settleHost` → `commitFrame` → `update`
 

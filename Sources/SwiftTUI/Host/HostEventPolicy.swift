@@ -2,12 +2,16 @@ import Foundation
 
 /// Policy for the serial host input pump.
 ///
-/// DECSET 1003 delivers a mouse-move for every cell. Settling (Update→Paint→Present)
-/// on each move blocks the input pump so keys/clicks sit behind a backlog — while
-/// scroll/resize still eventually run, which matches "input frozen but scroll works".
+/// The input task must never await Update→Paint→Present. Terminal present can
+/// take 100ms–1s+; doing that inline on the pump freezes keys/clicks while
+/// hover (move, no wake) and later scroll still appear to work.
+///
+/// DECSET 1003 floods mouse-move — those only wake the frame loop when commit
+/// work is already pending. Keys/clicks/scroll/resize always wake so the frame
+/// task can settle without blocking the next read.
 enum HostEventPolicy {
-    /// Events that must finish a settle before the pump reads the next event.
-    static func requiresInlineSettle(_ event: VTEvent) -> Bool {
+    /// Whether this event should wake the frame loop after handling.
+    static func shouldWakeFrameLoop(_ event: VTEvent) -> Bool {
         switch event {
         case .key, .resize:
             return true

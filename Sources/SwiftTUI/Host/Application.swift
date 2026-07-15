@@ -23,10 +23,39 @@ public final class Application {
     /// After terminal resize, clear the entire size-cache tree once.
     private var needsFullSizeCacheInvalidation = false
 
+    /// After consuming a press that dismissed a light popup, ignore the matching
+    /// release so it cannot synthesize another click.
+    private var swallowNextMouseRelease = false
+
+    /// Re-assert DECSET mouse modes once after the first click (some terminals
+    /// only start 1003 motion after focus / first click).
+    private var didReassertMouseModes = false
+    /// #region agent log
+    private var didLogFirstMove = false
+    /// #endregion
+
     /// TextField / TextEditor controls with staged Binding commits.
     private var pendingEditors: [ObjectIdentifier: Element] = [:]
 
+    /// Last paint dirty rect (window coords); for tests / debug.
+    private(set) var testing_lastPaintRect: Rect?
+
+    /// Suppresses panel-refresh feedback while `refreshPresentedPanels` runs.
+    private var isRefreshingPresentedPanels = false
+
+    /// Last pointer position from the terminal. After a commit rebuilds
+    /// elements, hover is re-resolved here so the fresh element instances
+    /// take over enter/leave (a rebuilt row must still receive `false` later).
+    private var lastMousePosition: Position?
+
     private static let maxUpdateIterations = 4
+
+    /// DECSET off→on toggle: 1000 base clicks, 1002 drag, 1003 any-event
+    /// (onHover), 1006 SGR coords. Some emulators mute 1003 until a hard
+    /// re-enable, so always disable first.
+    static let mouseModesSequence =
+        "\u{1B}[?1000l\u{1B}[?1002l\u{1B}[?1003l\u{1B}[?1006l"
+        + "\u{1B}[?1000h\u{1B}[?1002h\u{1B}[?1003h\u{1B}[?1006h"
 
     public init<I: View>(rootView: I) {
         let popupPresenter = PopupPresenter()
@@ -75,9 +104,16 @@ public final class Application {
         self.renderer.vtRenderer = vtRenderer
 
         let terminal = vtRenderer.terminal
-        await terminal.write("\u{1B}[?1049h\u{1B}[2J\u{1B}[H\u{1B}[?25l\u{1B}[?7l\u{1B}[?1003h\u{1B}[?1006h")
+        // Mouse: 1000 base; 1002 drag; 1003 any-event (onHover); 1006 SGR.
+        // Toggle off→on after entering the alternate screen — some emulators
+        // mute 1003 until a hard re-enable.
+        let mouseOn = Self.mouseModesSequence
+        await terminal.write(
+            "\u{1B}[?1049h\u{1B}[2J\u{1B}[H\u{1B}[?25l\u{1B}[?7l" + mouseOn
+        )
         defer {
-            let seq = "\u{1B}[?25h\u{1B}[?1003l\u{1B}[?1006l\u{1B}[?1049l\u{1B}[?7h"
+            let seq =
+                "\u{1B}[?25h\u{1B}[?1003l\u{1B}[?1002l\u{1B}[?1000l\u{1B}[?1006l\u{1B}[?1049l\u{1B}[?7h"
             seq.withCString { _ = write(STDOUT_FILENO, $0, numericCast(strlen($0))) }
             renderer.stop()
             self.vtRenderer = nil
@@ -88,12 +124,14 @@ public final class Application {
         rootElement.layout(size: window.layer.frame.size)
         renderer.draw()
         try await flushPresent(force: true)
+        await terminal.write(mouseOn)
 
         isRunning = true
         defer {
             isRunning = false
             clock.cancelAll()
             scheduler.finish()
+            Self.drainPendingStdin()
         }
 
         let terminalInput = terminal.input
@@ -102,8 +140,11 @@ public final class Application {
             group.addTask { [self] in
                 await runFrameLoop()
             }
+            // `nonisolated` pump: waiting on the terminal stream must not hold
+            // MainActor across `present`/`update` (inherited task-group actor
+            // context was serializing input behind frames → every-other feel).
             group.addTask { [self] in
-                try await runInputLoop(terminalInput)
+                try await self.pumpTerminalInput(terminalInput)
             }
 
             let first = await group.nextResult()
@@ -126,14 +167,51 @@ public final class Application {
         }
     }
 
-    private func runInputLoop(_ terminalInput: VTEventStream) async throws {
+    /// Read terminal events without holding ``MainActor``.
+    ///
+    /// DECSET 1003 floods `.move` events. Awaiting MainActor for *each* move
+    /// (especially with debug logging) starved presses/keys in the pump — the
+    /// terminal had already delivered them, but they sat behind hundreds of
+    /// move hops. Moves are coalesced off the critical path; clicks/keys still
+    /// run in order on MainActor.
+    nonisolated private func pumpTerminalInput(_ terminalInput: VTEventStream) async throws {
+        let moves = MoveCoalescingBridge()
+        let flusher = Task { [moves] in
+            while let move = await moves.next() {
+                let ok = try? await Self.dispatchInputEvent(move, on: self)
+                if ok == false { break }
+            }
+        }
+        defer {
+            flusher.cancel()
+            Task { await moves.close() }
+        }
+
         do {
             for try await event in terminalInput {
-                guard isRunning else { break }
-                try await dispatchTerminalEvent(event)
+                if case .mouse(let mouse) = event, case .move = mouse.type {
+                    await moves.post(event)
+                    continue
+                }
+                // Deliver coalesced hover under the cursor before the click/key.
+                if let move = await moves.takeLatest() {
+                    let ok = try await Self.dispatchInputEvent(move, on: self)
+                    if !ok { break }
+                }
+                let shouldContinue = try await Self.dispatchInputEvent(event, on: self)
+                if !shouldContinue { break }
             }
+            await moves.close()
         } catch is CancellationError {
+            await moves.close()
         }
+    }
+
+    @MainActor
+    private static func dispatchInputEvent(_ event: VTEvent, on app: Application) async throws -> Bool {
+        guard app.isRunning else { return false }
+        try await app.dispatchTerminalEvent(event)
+        return app.isRunning
     }
 
     private func runFrameLoop() async {
@@ -152,45 +230,11 @@ public final class Application {
         }
     }
 
-    /// Production input dispatch: handle, then settle only when the event must
-    /// be visible before the next read (not on mouse-move floods).
+    /// Production input dispatch: handle, then wake the frame loop.
+    /// Never await settle/present here — that blocked the pump for 100ms–1s+.
     func dispatchTerminalEvent(_ event: VTEvent) async throws {
-        // #region agent log
-        let settle = HostEventPolicy.requiresInlineSettle(event)
-        DebugSessionLog.write(
-            hypothesisId: "C",
-            location: "Application.dispatchTerminalEvent:entry",
-            message: "dispatch",
-            data: [
-                "event": String(describing: event),
-                "inlineSettle": settle,
-                "isUpdating": isUpdating,
-                "hasPending": hasPendingCommitWork,
-                "fr": DebugSessionLog.typeName(window.firstResponder),
-                "capture": DebugSessionLog.typeName(window.mouseCapture),
-            ]
-        )
-        // #endregion
         handleTerminalEvent(event)
-        if settle {
-            // #region agent log
-            let t0 = Date().timeIntervalSince1970
-            // #endregion
-            try await settleHost()
-            // #region agent log
-            DebugSessionLog.write(
-                hypothesisId: "C",
-                location: "Application.dispatchTerminalEvent:afterSettle",
-                message: "settle done",
-                data: [
-                    "ms": Int((Date().timeIntervalSince1970 - t0) * 1000),
-                    "isUpdating": isUpdating,
-                    "hasPending": hasPendingCommitWork,
-                    "fr": DebugSessionLog.typeName(window.firstResponder),
-                ]
-            )
-            // #endregion
-        } else if hasPendingCommitWork {
+        if HostEventPolicy.shouldWakeFrameLoop(event) || hasPendingCommitWork {
             scheduleUpdate()
         }
     }
@@ -199,27 +243,14 @@ public final class Application {
     @discardableResult
     func settleHost(maxCommits: Int = 8) async throws -> Int {
         var commits = 0
-        var yieldsWhileBusy = 0
         while commits < maxCommits {
-            // Another task holds the commit lock (usually frame settle during
-            // `await present`). Yield — do not burn the commit budget on no-ops.
+            // Frame loop owns the open commit (often suspended in `present`).
+            // Return immediately so the input pump can keep reading release/keys;
+            // `scheduleUpdate` / commit deferral finishes the paint.
             if isUpdating {
-                yieldsWhileBusy += 1
-                // #region agent log
-                if yieldsWhileBusy == 1 || yieldsWhileBusy == 32 || yieldsWhileBusy > 64 {
-                    DebugSessionLog.write(
-                        hypothesisId: "C",
-                        location: "Application.settleHost:busy",
-                        message: "yield while isUpdating",
-                        data: ["yields": yieldsWhileBusy, "commits": commits]
-                    )
-                }
-                // #endregion
-                if yieldsWhileBusy > 64 { break }
-                await Task.yield()
-                continue
+                scheduleUpdate()
+                return commits
             }
-            yieldsWhileBusy = 0
 
             if hasPendingCommitWork {
                 let did = try await commitFrame()
@@ -227,10 +258,6 @@ public final class Application {
                 // Headless present does not suspend — yield so MainActor Tasks
                 // (Observation) can land before we declare idle.
                 await Task.yield()
-                continue
-            }
-            if scheduler.hasPendingWake {
-                scheduler.acknowledgeWake()
                 continue
             }
             break
@@ -273,18 +300,25 @@ public final class Application {
     func invalidateNode(_ node: Node, layout: Bool = false) {
         guard node.isAttached(to: self) else { return }
         transaction.invalidate(node, layout: layout)
-        window.popupPresenter?.noteContentInvalidated()
-        scheduleUpdate()
+        if !isRefreshingPresentedPanels {
+            window.popupPresenter?.noteContentInvalidated()
+        }
+        // During an open commit, the update loop already drains `transaction`
+        // via `needsAnother`. Scheduling here only set `needsReschedule` and
+        // spawned extra frames (paint storms ~70ms full redraws).
+        if !isUpdating {
+            scheduleUpdate()
+        }
     }
 
     func requestLayout() {
         transaction.requestLayout()
-        scheduleUpdate()
+        if !isUpdating { scheduleUpdate() }
     }
 
     func requestPaint() {
         transaction.requestPaint()
-        scheduleUpdate()
+        if !isUpdating { scheduleUpdate() }
     }
 
     func scheduleUpdate() {
@@ -301,7 +335,7 @@ public final class Application {
     func noteEditorNeedsCommit(_ control: Element) {
         pendingEditors[ObjectIdentifier(control)] = control
         transaction.requestPaint()
-        scheduleUpdate()
+        if !isUpdating { scheduleUpdate() }
     }
 
     private func flushPendingEditorCommits() {
@@ -343,101 +377,172 @@ public final class Application {
         }
         #endif
 
-        // #region agent log
-        DebugSessionLog.write(
-            hypothesisId: "A",
-            location: "Application.handleKeyInput",
-            message: "key",
-            data: [
-                "char": event.character.map(String.init) ?? "",
-                "fr": DebugSessionLog.typeName(window.firstResponder),
-                "frCanFocus": window.firstResponder?.canReceiveFocus ?? false,
-            ]
-        )
-        // #endregion
+        // While a presentation is open, keys go to the presented host (Escape /
+        // menu) — not the underlying TextEditor — unless focus is already inside
+        // the presentation (popover/modal with a text field).
+        if let presenter = window.popupPresenter,
+           presenter.isPresented,
+           let host = presenter.top?.hostElement
+        {
+            let fr = window.firstResponder
+            let focusInside =
+                fr != nil && (fr === host || fr!.isDescendant(of: host))
+            if focusInside {
+                fr?.handleKeyEvent(event)
+            } else {
+                host.handleKeyEvent(event)
+            }
+            return
+        }
 
-        // Keys go only to firstResponder — never broadcast down the tree.
+        // Text focus only — Buttons / ScrollView never become firstResponder.
         window.firstResponder?.handleKeyEvent(event)
     }
 
     private func handleMouseInput(_ event: MouseEvent) {
         let pos = event.position
-
-        if let capture = window.mouseCapture {
-            switch event.type {
-            case .move, .released:
-                // #region agent log
-                if case .released = event.type {
-                    DebugSessionLog.write(
-                        hypothesisId: "B",
-                        location: "Application.handleMouseInput:captureRelease",
-                        message: "release to capture",
-                        data: [
-                            "capture": DebugSessionLog.typeName(capture),
-                            "pos": "\(pos.column),\(pos.line)",
-                        ]
-                    )
-                }
-                // #endregion
-                capture.handleMouseEvent(event)
-                if case .released = event.type {
-                    window.mouseCapture = nil
-                }
-                window.setHoveredElement(rootElement.hitTest(position: pos))
-                return
-            default:
-                break
-            }
-        }
-
-        let target = rootElement.hitTest(position: pos)
-
-        let shouldDismissPopup: Bool = {
-            guard let presenter = window.popupPresenter, presenter.isPresented else { return false }
-            if presenter.blocksUnderlyingHits { return false }
-            guard let frame = presenter.panelFrame else { return false }
-            switch event.type {
-            case .released(.left), .released(.right):
-                return !frame.contains(pos)
-            default:
-                return false
-            }
-        }()
+        lastMousePosition = pos
+        let presenter = window.popupPresenter
+        let lightPopup =
+            presenter?.isPresented == true && presenter?.blocksUnderlyingHits == false
+        let inPopupPanel = presenter?.panelFrame?.contains(pos) ?? false
 
         // #region agent log
-        switch event.type {
-        case .pressed, .released:
+        if !didLogFirstMove, case .move = event.type {
+            didLogFirstMove = true
             DebugSessionLog.write(
-                hypothesisId: "D",
-                location: "Application.handleMouseInput:click",
-                message: "mouse click path",
-                data: [
-                    "type": String(describing: event.type),
-                    "pos": "\(pos.column),\(pos.line)",
-                    "target": DebugSessionLog.typeName(target),
-                    "targetCanFocus": target?.canReceiveFocus ?? false,
-                    "frBefore": DebugSessionLog.typeName(window.firstResponder),
-                    "popupPresented": window.popupPresenter?.isPresented ?? false,
-                    "dismissOutside": shouldDismissPopup,
-                ]
+                hypothesisId: "H1",
+                location: "Application.handleMouseInput",
+                message: "first move seen — 1003 active",
+                data: ["pos": "\(pos.column),\(pos.line)", "clickedBefore": didReassertMouseModes],
+                runId: "post-cleanup"
             )
-        default:
-            break
         }
         // #endregion
 
-        window.setHoveredElement(target)
-
-        if let target {
-            target.handleMouseEvent(event)
-            if case .pressed(.left) = event.type, target.canReceiveFocus {
-                window.setFirstResponder(target)
+        // Light menu: press outside panel (not on anchor) dismisses.
+        if lightPopup, case .pressed(.left) = event.type {
+            let onAnchor = presenter?.anchor.contains(pos) == true
+            if !inPopupPanel, !onAnchor {
+                window.cancelPointerGesture()
+                swallowNextMouseRelease = true
+                presenter?.dismiss()
+                window.setHoveredElement(rootElement.hitTest(position: pos))
+                return
+            }
+            if !inPopupPanel, onAnchor {
+                window.cancelPointerGesture()
             }
         }
 
-        if shouldDismissPopup {
-            window.popupPresenter?.dismiss()
+        if swallowNextMouseRelease, case .released = event.type {
+            swallowNextMouseRelease = false
+            window.cancelPointerGesture()
+            window.setHoveredElement(hoverTarget(at: pos))
+            return
         }
+
+        switch event.type {
+        case .pressed(let button):
+            // UIKit: hitTest → began. Same-target re-press keeps the session
+            // (terminal sometimes repeats press without release); otherwise cancel.
+            let target = rootElement.pointerGestureTarget(at: pos)
+            if let session = window.pointerGesture,
+               let existing = session.target,
+               existing === target
+            {
+                // Same-target repeated press — keep the session.
+            } else {
+                window.cancelPointerGesture()
+                if let target {
+                    let began = target.pointerGesture(
+                        PointerGestureEvent(phase: .began, position: pos, button: button)
+                    )
+                    // Only own a session when the target accepted `.began`
+                    // (Buttons / editors). Scroll background etc. return false —
+                    // leaving a dead session made later releases hit the wrong owner.
+                    if began {
+                        window.pointerGesture = PointerGestureSession(target: target, button: button, start: pos)
+                        if target.retainsPointerCaptureAfterPress {
+                            window.mouseCapture = target
+                        }
+                    }
+                    if let leaf = rootElement.hitTest(position: pos),
+                       let focus = leaf.focusTargetOnClick
+                    {
+                        window.setFirstResponder(focus)
+                    }
+                }
+            }
+            // Hard re-enable mouse modes on first click — terminals that mute
+            // 1003 until interaction often start emitting moves after this.
+            if !didReassertMouseModes, let terminal = vtRenderer?.terminal {
+                didReassertMouseModes = true
+                let mouseOn = Self.mouseModesSequence
+                Task { @MainActor in
+                    await terminal.write(mouseOn)
+                }
+            }
+            window.setHoveredElement(hoverTarget(at: pos))
+
+        case .move:
+            if presenter?.isPresented == true {
+                window.setHoveredElement(hoverTarget(at: pos))
+            } else {
+                window.setHoveredElement(rootElement.hitTest(position: pos))
+            }
+            if let session = window.pointerGesture, let target = session.target {
+                _ = target.pointerGesture(
+                    PointerGestureEvent(phase: .moved, position: pos, button: session.button)
+                )
+            } else if let capture = window.mouseCapture {
+                _ = capture.consumeMouseEvent(event)
+            }
+
+        case .released(let button):
+            if let session = window.pointerGesture, let target = session.target {
+                _ = target.pointerGesture(
+                    PointerGestureEvent(phase: .ended, position: pos, button: button)
+                )
+            }
+            // Orphan releases (no session) are ignored — never synthesize a click.
+            window.pointerGesture = nil
+            window.mouseCapture = nil
+            window.setHoveredElement(hoverTarget(at: pos))
+
+        case .scroll:
+            _ = rootElement.dispatchMouseEvent(event)
+            window.setHoveredElement(hoverTarget(at: pos))
+        }
+    }
+
+    /// Hover hit-test: while any presentation is open, only the presented host
+    /// (and its descendants) may become `hoveredElement`. Outside a light popup
+    /// panel → `nil` (underlying onHover stays frozen).
+    ///
+    /// Important: `hostElement` is attached on the next view update after
+    /// `present()`. While the stack is non-empty but the host is not built yet,
+    /// still isolate hover (`nil`) so underlying onHover does not see a leave.
+    private func hoverTarget(at pos: Position) -> Element? {
+        guard let presenter = window.popupPresenter, presenter.isPresented else {
+            return rootElement.hitTest(position: pos)
+        }
+        guard let host = presenter.top?.hostElement else {
+            return nil
+        }
+        // `Element.hitTest` expects parent-local coords; `pos` is window-absolute.
+        let parentOrigin = host.parent?.absoluteFrame.position ?? .zero
+        let inParent = Position(
+            column: pos.column - parentOrigin.column,
+            line: pos.line - parentOrigin.line
+        )
+        if presenter.blocksUnderlyingHits {
+            return host.hitTest(position: inParent) ?? host
+        }
+        if let frame = presenter.panelFrame, frame.contains(pos) {
+            return host.hitTest(position: inParent) ?? host
+        }
+        return nil
     }
 
     // MARK: - Frame pipeline
@@ -484,18 +589,24 @@ public final class Application {
             // 1. Flush staged editor → Binding writes (may invalidate nodes).
             flushPendingEditorCommits()
 
-            // 2. Rebuild dirty view graph nodes.
+            // 2. Rebuild dirty view graph nodes (skip covered keep-alive pages).
             let nodes = transaction.takeInvalidatedNodes()
-            let hadNodes = !nodes.isEmpty
-            if hadNodes { hadViewUpdates = true }
+            var didUpdateNodes = false
             for node in nodes where node.isAttached(to: self) {
+                if node.isUpdateSuppressed { continue }
                 node.update(using: node.view)
+                didUpdateNodes = true
             }
+            if didUpdateNodes { hadViewUpdates = true }
 
             let presenter = window.popupPresenter
             let hadPanelRefresh = presenter?.needsPanelRefresh == true
-            presenter?.refreshPresentedPanels()
-            if hadPanelRefresh { hadViewUpdates = true }
+            if hadPanelRefresh {
+                isRefreshingPresentedPanels = true
+                presenter?.refreshPresentedPanels()
+                isRefreshingPresentedPanels = false
+                hadViewUpdates = true
+            }
 
             // 3. Layout only when requested.
             var layoutPasses = 0
@@ -511,12 +622,12 @@ public final class Application {
                 window.layer.invalidate()
             }
 
-            // 4. Paint once per iteration. View work without a dirty rect still
-            //    forces a full-window invalidate so State changes are visible.
-            if window.layer.invalidated == nil, transaction.needsPaint || hadNodes {
+            // 4. Paint from the accumulated dirty rect (no forced full-window expand).
+            if window.layer.invalidated == nil, transaction.needsPaint {
                 window.layer.invalidate()
             }
             if window.layer.invalidated != nil {
+                testing_lastPaintRect = window.layer.invalidated
                 renderer.update()
                 transaction.clearPaint()
                 didPaint = true
@@ -527,12 +638,21 @@ public final class Application {
                 || transaction.needsLayout
                 || !pendingEditors.isEmpty
                 || presenter?.needsPanelRefresh == true
-            if !hadNodes, !hadPanelRefresh, !needsAnother {
+            if !needsAnother {
                 break
             }
-            if iterations == Self.maxUpdateIterations, needsAnother {
+            if iterations == Self.maxUpdateIterations {
                 needsReschedule = true
             }
+        }
+
+        // Hover is geometric, not identity-based. A rebuild/relayout can destroy
+        // or move the element under the cursor (Window.hoveredElement is weak and
+        // dangles), which used to swallow the leave (`onHover(false)`) for the
+        // replacement row. Re-resolve against the *new* tree at the last pointer
+        // position so fresh elements take over enter/leave.
+        if hadViewUpdates || didLayout, let pos = lastMousePosition {
+            window.setHoveredElement(hoverTarget(at: pos))
         }
 
         flushSwiftDataIfNeeded()
@@ -574,8 +694,87 @@ public final class Application {
 
     private func stop() {
         isRunning = false
+        #if !os(Windows)
+        // Kick any parked stdin reader so the next Application.start() is not
+        // racing History’s terminal for TTY bytes.
+        _ = StdinReaderGate.claim()
+        #endif
         clock.cancelAll()
         scheduler.finish()
+        // Discard tty bytes already queued (e.g. the click's release after
+        // dismiss). Otherwise the *next* Application sees orphan releases.
+        Self.drainPendingStdin()
+    }
+
+    /// Non-blocking drain of stdin so a sequential `Application.start()` does
+    /// not inherit stale press/release bytes from the previous session.
+    nonisolated private static func drainPendingStdin() {
+        #if !os(Windows)
+        let fd = STDIN_FILENO
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0 else { return }
+        _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        var buf = [UInt8](repeating: 0, count: 256)
+        while read(fd, &buf, buf.count) > 0 {}
+        _ = fcntl(fd, F_SETFL, flags)
+        #endif
+    }
+}
+
+// MARK: - Move coalescing (input pump)
+
+/// Newest-wins slot so the input reader never awaits MainActor per DECSET 1003 move.
+private actor MoveCoalescingBridge {
+    private var latest: VTEvent?
+    private var waiter: CheckedContinuation<VTEvent?, Never>?
+    private var closed = false
+
+    func post(_ event: VTEvent) {
+        guard !closed else { return }
+        latest = event
+        if let waiter {
+            self.waiter = nil
+            let value = latest
+            latest = nil
+            waiter.resume(returning: value)
+        }
+    }
+
+    /// Steal the pending move for the click/key path (ordering before the click).
+    func takeLatest() -> VTEvent? {
+        let event = latest
+        latest = nil
+        return event
+    }
+
+    /// Suspend until a move is posted, or nil when closed.
+    func next() async -> VTEvent? {
+        if closed { return nil }
+        if let event = latest {
+            latest = nil
+            return event
+        }
+        return await withCheckedContinuation { continuation in
+            if closed {
+                continuation.resume(returning: nil)
+                return
+            }
+            if let event = latest {
+                latest = nil
+                continuation.resume(returning: event)
+                return
+            }
+            waiter = continuation
+        }
+    }
+
+    func close() {
+        closed = true
+        latest = nil
+        if let waiter {
+            self.waiter = nil
+            waiter.resume(returning: nil)
+        }
     }
 }
 
@@ -592,13 +791,12 @@ extension Application {
         try await testing_drainUntilIdle()
     }
 
-    /// Same path as the live input pump (``dispatchTerminalEvent``).
+    /// Production dispatch + frame settle (tests have no frame-loop task).
     func testing_turn(input: VTEvent? = nil) async throws {
         if let input {
             try await dispatchTerminalEvent(input)
-        } else {
-            try await settleHost()
         }
+        try await settleHost()
     }
 
     /// Strict one-commit turn (no residual drain) — used to catch one-behind.
@@ -619,7 +817,13 @@ extension Application {
 
     @discardableResult
     func testing_drainUntilIdle(maxCommits: Int = 64) async throws -> Int {
-        try await settleHost(maxCommits: maxCommits)
+        let commits = try await settleHost(maxCommits: maxCommits)
+        // Headless tests have no frame loop to consume the buffered wake;
+        // clear the flag so post-drain `schedule()` enqueues observably.
+        if !hasPendingCommitWork {
+            scheduler.acknowledgeWake()
+        }
+        return commits
     }
 
     var testing_scheduler: FrameScheduler { scheduler }
