@@ -52,6 +52,8 @@ import Foundation
         var alignment: VerticalAlignment
         var spacing: Extended
 
+        override var donatesDescendantPointerOnClick: Bool { true }
+
         init(alignment: VerticalAlignment, spacing: Extended) {
             self.alignment = alignment
             self.spacing = spacing
