@@ -34,6 +34,9 @@ struct WeakElementRef {
     /// Active UIKit-style pointer gesture (began → moved → ended).
     var pointerGesture: PointerGestureSession?
 
+    /// Application-wide text selection registry (at most one active selection).
+    let selectionCoordinator = SelectionCoordinator()
+
     /// Clear capture and notify the previous owner (gesture / press-armed reset).
     func clearMouseCapture() {
         guard let capture = mouseCapture else { return }
@@ -57,7 +60,9 @@ struct WeakElementRef {
     weak var popupPresenter: PopupPresenter?
 
     func addElement(_ control: Element) {
-        control.window = self
+        // The subtree is built before attachment; propagate to every node,
+        // not just the root.
+        control.assignWindow(self, to: control)
         self.elements.append(control)
         layer.addLayer(control.layer, at: 0)
     }

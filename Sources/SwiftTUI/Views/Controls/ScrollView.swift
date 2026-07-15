@@ -123,6 +123,8 @@ import Foundation
             return false
         }
 
+        override var scrollViewportAbsoluteFrame: Rect? { absoluteFrame }
+
         /// Clamps offset, updates lazy visible region, optionally lays out, then moves content.
         private func applyScrollOffset() {
             let viewportHeight = layer.frame.size.height

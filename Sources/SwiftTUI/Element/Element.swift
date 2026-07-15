@@ -52,6 +52,12 @@ import Foundation
 
     func hoveredStateDidChange() {}
 
+    /// Absolute frame of the nearest enclosing scroll viewport, if any.
+    /// Used by text-selection edge auto-scroll: a `.selectable()` region inside
+    /// a `ScrollView` is often taller than the visible viewport, so edge
+    /// detection must use the viewport — not the region's own frame.
+    var scrollViewportAbsoluteFrame: Rect? { parent?.scrollViewportAbsoluteFrame }
+
     func addSubview(_ view: Element, at index: Int) {
         invalidateSizeCacheUpward()
         self.children.insert(view, at: index)
@@ -112,7 +118,7 @@ import Foundation
         }
     }
 
-    private func assignWindow(_ window: Window?, to control: Element) {
+    func assignWindow(_ window: Window?, to control: Element) {
         control.window = window
         for child in control.children {
             assignWindow(window, to: child)
@@ -224,8 +230,31 @@ import Foundation
     /// Return `true` when this node owns / handled the phase.
     func pointerGesture(_ event: PointerGestureEvent) -> Bool { false }
 
+    /// When `true`, this element takes over pointer gestures for its whole
+    /// subtree (text selection). Clean clicks are re-forwarded to the inner
+    /// control by the interceptor, so taps / buttons keep working.
+    var interceptsPointerGestures: Bool { false }
+
     /// Hit-test leaf, then climb to the pointer owner (Button / editor / …).
     func pointerGestureTarget(at absolutePosition: Position) -> Element? {
+        guard let leaf = hitTest(position: absolutePosition) else { return nil }
+        let normal = leaf.pointerTargetOnClick ?? leaf
+        // A `.selectable()` ancestor owns drags over its subtree — except when
+        // the press lands on a focusable text control, whose own editing
+        // selection handles dragging.
+        if !normal.canReceiveFocus {
+            var current: Element? = leaf
+            while let node = current {
+                if node.interceptsPointerGestures { return node }
+                current = node.parent
+            }
+        }
+        return normal
+    }
+
+    /// The pointer owner ignoring selection interception (used by the
+    /// interceptor to re-forward clean clicks).
+    func pointerGestureTargetBypassingInterception(at absolutePosition: Position) -> Element? {
         guard let leaf = hitTest(position: absolutePosition) else { return nil }
         return leaf.pointerTargetOnClick ?? leaf
     }

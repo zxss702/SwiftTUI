@@ -40,6 +40,11 @@ import Foundation
         // When vtRenderer is injected, ScreenBuffer directly maps TUI Cell writes to VTCell.
         var buffer = ScreenBuffer(rect: rect, vtRenderer: vtRenderer)
         layer.draw(into: &buffer)
+
+        // Top-level selection highlight: applied over the final frame so it is
+        // always aligned with what is actually on screen (wide characters,
+        // overlapping views). Views never draw this themselves.
+        application?.window.selectionCoordinator.applyHighlight(into: &buffer)
     }
 
     func stop() {
