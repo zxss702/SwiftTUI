@@ -616,7 +616,10 @@ private final class TextEditorElement: Element {
                 removeSelectedText()
                 let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
                 cachedText.insert("\n", at: cursorIndex)
-                cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
+                cursorIndex = cachedText.index(
+                    cachedText.startIndex,
+                    offsetBy: min(distance + 1, cachedText.count)
+                )
             }
         } else if char == "\t" {
             // Tab has Character.width == 0; inserting it crashes wide-char padding in draw.
@@ -625,13 +628,16 @@ private final class TextEditorElement: Element {
                 removeSelectedText()
                 let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
                 cachedText.insert(contentsOf: spaces, at: cursorIndex)
-                cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + spaces.count)
+                cursorIndex = cachedText.index(
+                    cachedText.startIndex,
+                    offsetBy: min(distance + spaces.count, cachedText.count)
+                )
             }
         } else if char.isASCII && char.isWhitespace && char != " " {
             return
         } else if let ascii = char.asciiValue, ascii < 0x20 {
             return
-        } else if char.width == 0 {
+        } else if char.width == 0, char.isASCII {
             return
         } else {
             let hadSelection = selectionRange != nil
@@ -642,7 +648,12 @@ private final class TextEditorElement: Element {
                 removeSelectedText()
                 let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
                 cachedText.insert(char, at: cursorIndex)
-                cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
+                // ZWJ / VS16 may merge into the previous grapheme; clamp so
+                // `offsetBy` never traps past `endIndex`.
+                cursorIndex = cachedText.index(
+                    cachedText.startIndex,
+                    offsetBy: min(distance + 1, cachedText.count)
+                )
             }
             lastInsertedCharacter = char
         }

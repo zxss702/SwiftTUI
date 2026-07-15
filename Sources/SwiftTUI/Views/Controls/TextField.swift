@@ -432,7 +432,10 @@ final class TextFieldElement: Element {
         }
         if char.isASCII && char.isWhitespace && char != " " { return }
         if let ascii = char.asciiValue, ascii < 0x20 { return }
-        if char.width == 0 { return }
+        // Zero-width ASCII controls are ignored; ZWJ / VS16 / combining marks
+        // must be accepted so emoji clusters can compose (rejecting them left
+        // the cursor past `count` and crashed on the next edit).
+        if char.width == 0, char.isASCII { return }
         if selectionRange != nil {
             recordUndo(group: nil)
             removeSelectedCharacters()
@@ -441,13 +444,16 @@ final class TextFieldElement: Element {
             collapseSelection()
         }
         lastInsertedCharacter = char
+        let insertAt = cursorIndex
         var chars = Array(cachedText)
-        chars.insert(char, at: cursorIndex)
+        chars.insert(char, at: min(insertAt, chars.count))
         cachedText = String(chars)
-        let insertedAt = cursorIndex
-        cursorIndex += 1
+        // Grapheme recomposition (ZWJ / VS16) can shrink `count`; never let
+        // the cursor sit past the end.
+        cursorIndex = min(insertAt + 1, cachedText.count)
         if secure {
-            revealSecureCharacter(at: insertedAt)
+            let revealAt = min(insertAt, max(0, cachedText.count - 1))
+            revealSecureCharacter(at: revealAt)
         }
         stageLocalEdit()
     }
