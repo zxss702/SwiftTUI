@@ -79,7 +79,9 @@ private final class StepperElement: Element {
         self.isEnabledFlag = isEnabled
     }
 
-    override var selectable: Bool { isEnabledFlag }
+    /// Click only — not a keyboard first-responder (SwiftUI-shaped focus).
+    override var selectable: Bool { false }
+    override var claimsPointerCapture: Bool { isEnabledFlag }
 
     override func size(proposedSize: Size) -> Size {
         let label = "[\(value.wrappedValue)] − +"
@@ -106,15 +108,33 @@ private final class StepperElement: Element {
         }
     }
 
-    override func handleMouseEvent(_ event: MouseEvent) {
-        guard isEnabledFlag else { return }
-        if case .released(.left) = event.type {
+    private var adjustedThisGesture = false
+
+    override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+        guard isEnabledFlag, event.button == .left else { return false }
+        switch event.phase {
+        case .began:
+            guard !adjustedThisGesture else { return true }
+            adjustedThisGesture = true
             let local = event.position - absoluteFrame.position
             let mid = layer.frame.size.width / 2
             adjust(local.column < mid ? -step : step)
-        } else {
-            super.handleMouseEvent(event)
+            return true
+        case .ended, .cancelled:
+            if event.phase == .ended, !adjustedThisGesture {
+                let local = event.position - absoluteFrame.position
+                let mid = layer.frame.size.width / 2
+                adjust(local.column < mid ? -step : step)
+            }
+            adjustedThisGesture = false
+            return true
+        case .moved:
+            return adjustedThisGesture
         }
+    }
+
+    override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
+        false
     }
 
     override func draw(into buffer: inout ScreenBuffer) {

@@ -72,6 +72,9 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
         var minHeight: Extended?
         var maxHeight: Extended?
         var alignment: Alignment
+
+        /// Empty max-frame chrome around a field should still focus the field.
+        override var donatesDescendantPointerOnClick: Bool { true }
         
         init(minWidth: Extended?, maxWidth: Extended?, minHeight: Extended?, maxHeight: Extended?, alignment: Alignment) {
             self.minWidth = minWidth

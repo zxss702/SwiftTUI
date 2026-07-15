@@ -79,7 +79,10 @@ private final class SliderElement: Element {
         self.isEnabledFlag = isEnabled
     }
 
-    override var selectable: Bool { isEnabledFlag }
+    /// Drag/click only — not a keyboard first-responder (SwiftUI-shaped focus).
+    override var selectable: Bool { false }
+    override var claimsPointerCapture: Bool { isEnabledFlag }
+    override var retainsPointerCaptureAfterPress: Bool { isEnabledFlag }
 
     override func size(proposedSize: Size) -> Size {
         if proposedSize.width == .infinity {
@@ -101,17 +104,22 @@ private final class SliderElement: Element {
         }
     }
 
-    override func handleMouseEvent(_ event: MouseEvent) {
-        guard isEnabledFlag else { return }
-        switch event.type {
-        case .pressed(.left), .released(.left), .move:
+    override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+        guard isEnabledFlag, event.button == .left else { return false }
+        switch event.phase {
+        case .began, .moved, .ended:
             let local = event.position - absoluteFrame.position
             let width = max(1, layer.frame.size.width.intValue - 1)
             let ratio = min(1, max(0, Double(local.column.intValue) / Double(width)))
             setValue(bounds.lowerBound + ratio * (bounds.upperBound - bounds.lowerBound))
-        default:
-            super.handleMouseEvent(event)
+            return true
+        case .cancelled:
+            return true
         }
+    }
+
+    override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
+        false
     }
 
     override func draw(into buffer: inout ScreenBuffer) {

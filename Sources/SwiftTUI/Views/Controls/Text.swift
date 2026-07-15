@@ -155,16 +155,28 @@ import Foundation
                     let line = cachedLines[lineIndex]
                     for char in line {
                         let charWidth = char.width
+                        if charWidth <= 0 {
+                            if char == "\t", currentWidth < maxWidth {
+                                buffer.setCell(
+                                    Cell(char: " ", foregroundColor: foregroundColor, attributes: attributes),
+                                    at: Position(column: Extended(currentWidth), line: Extended(lineIndex))
+                                )
+                                currentWidth += 1
+                            }
+                            continue
+                        }
                         if currentWidth + charWidth > maxWidth { break }
                         buffer.setCell(
                             Cell(char: char, foregroundColor: foregroundColor, attributes: attributes),
                             at: Position(column: Extended(currentWidth), line: Extended(lineIndex))
                         )
-                        for w in 1 ..< charWidth {
-                            buffer.setCell(
-                                Cell(char: "\u{0000}", foregroundColor: foregroundColor, attributes: attributes),
-                                at: Position(column: Extended(currentWidth + w), line: Extended(lineIndex))
-                            )
+                        if charWidth > 1 {
+                            for w in 1 ..< charWidth {
+                                buffer.setCell(
+                                    Cell(char: "\u{0000}", foregroundColor: foregroundColor, attributes: attributes),
+                                    at: Position(column: Extended(currentWidth + w), line: Extended(lineIndex))
+                                )
+                            }
                         }
                         currentWidth += charWidth
                     }

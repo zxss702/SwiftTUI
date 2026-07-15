@@ -59,6 +59,9 @@ private struct Padding<Content: View>: View, PrimitiveView, ModifierView {
 
         let defaultLength: Extended = 1
 
+        /// Padding chrome around a Button/TextField should still activate it.
+        override var donatesDescendantPointerOnClick: Bool { true }
+
         init(edges: Edges, length: Extended?) {
             self.edges = edges
             self.length = length

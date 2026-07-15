@@ -72,23 +72,49 @@ private struct OnTapGestureModifier<Content: View>: View, PrimitiveView, Modifie
             return self
         }
 
-        override func handleMouseEvent(_ event: MouseEvent) {
-            if case .released(.left) = event.type {
-                taps += 1
-                cancelReset()
-                if taps >= count {
-                    taps = 0
-                    action()
-                } else if let clock = layer.rootRenderer?.application?.clock {
-                    resetWorkID = clock.schedule(after: 0.3) { [weak self] in
-                        self?.taps = 0
-                        self?.resetWorkID = nil
-                    }
-                } else {
-                    taps = 0
+        override func dispatchMouseEvent(_ event: MouseEvent) -> Bool {
+            guard absoluteFrame.contains(event.position) else { return false }
+            return consumeMouseEvent(event)
+        }
+
+        private var countedThisGesture = false
+
+        override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+            guard event.button == .left else { return false }
+            switch event.phase {
+            case .began:
+                guard !countedThisGesture else { return true }
+                countedThisGesture = true
+                registerTap()
+                return true
+            case .ended, .cancelled:
+                if event.phase == .ended, !countedThisGesture {
+                    registerTap()
+                }
+                countedThisGesture = false
+                return true
+            case .moved:
+                return countedThisGesture
+            }
+        }
+
+        override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
+            false
+        }
+
+        private func registerTap() {
+            taps += 1
+            cancelReset()
+            if taps >= count {
+                taps = 0
+                action()
+            } else if let clock = layer.rootRenderer?.application?.clock {
+                resetWorkID = clock.schedule(after: 0.3) { [weak self] in
+                    self?.taps = 0
+                    self?.resetWorkID = nil
                 }
             } else {
-                super.handleMouseEvent(event)
+                taps = 0
             }
         }
 

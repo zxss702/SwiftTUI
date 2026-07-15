@@ -55,7 +55,33 @@ private struct OnHover<Content: View>: View, PrimitiveView, ModifierView {
         }
 
         override func hoveredStateDidChange() {
+            // SwiftUI: while menu/popover/sheet is presented, only the presented
+            // layer delivers onHover; underlying views stay frozen (no true/false).
+            let presented = window?.popupPresenter?.isPresented == true
+            let inHost: Bool = {
+                guard let host = window?.popupPresenter?.top?.hostElement else {
+                    // Host not mounted yet — treat every onHover as underlying.
+                    return false
+                }
+                return self === host || isDescendant(of: host)
+            }()
+            // #region agent log
+            DebugSessionLog.write(
+                hypothesisId: "H3",
+                location: "OnHoverElement.hoveredStateDidChange",
+                message: "onHover callback",
+                data: [
+                    "hovered": isHovered,
+                    "suppressed": presented && !inHost,
+                ],
+                runId: "post-cleanup"
+            )
+            // #endregion
+            if presented && !inHost { return }
             action(isHovered)
+            // Ensure leave/enter paints even when the action does not dirty @State
+            // (and so Observation would not schedule a frame).
+            layer.invalidate()
         }
     }
 }

@@ -114,13 +114,13 @@ import Foundation
             }
         }
 
-        override func handleMouseEvent(_ event: MouseEvent) {
+        override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
             if case .scroll(_, let deltaY) = event.type {
                 contentOffset += Extended(deltaY)
                 applyScrollOffset()
-            } else {
-                super.handleMouseEvent(event)
+                return true
             }
+            return false
         }
 
         /// Clamps offset, updates lazy visible region, optionally lays out, then moves content.

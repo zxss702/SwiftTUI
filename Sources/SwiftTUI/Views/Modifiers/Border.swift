@@ -119,6 +119,10 @@ private struct Border<Content: View>: View, PrimitiveView, ModifierView {
         var color: Color
         var style: BorderStyle
 
+        /// Border glyphs sit outside the child frame; donate so clicks still focus
+        /// an inner TextField / Button (SwiftUI hit-testing through chrome).
+        override var donatesDescendantPointerOnClick: Bool { true }
+
         init(color: Color, style: BorderStyle) {
             self.color = color
             self.style = style

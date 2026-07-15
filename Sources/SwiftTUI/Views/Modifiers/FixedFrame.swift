@@ -59,6 +59,7 @@ private struct FixedFrame<Content: View>: View, PrimitiveView, ModifierView {
     }
 
     private class FixedFrameElement: Element {
+        override var donatesDescendantPointerOnClick: Bool { true }
         var width: Extended?
         var height: Extended?
         var alignment: Alignment

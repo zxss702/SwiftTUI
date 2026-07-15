@@ -43,6 +43,8 @@ private struct Background<Content: View>: View, PrimitiveView, ModifierView {
     private class BackgroundElement: Element {
         var color: Color
 
+        override var donatesDescendantPointerOnClick: Bool { true }
+
         init(color: Color) {
             self.color = color
         }

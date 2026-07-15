@@ -42,7 +42,9 @@ import Foundation
             }
         }
 
-        // 按 id 取旧元素：Equatable 且相等则跳过存活项 update
+        // Skip survivor updates only when the *element value* is unchanged.
+        // Parents that close over extra state (e.g. "is top of stack") must
+        // encode that state into the element so Equatable comparison sees it.
         var lastByID: [ID: Data.Element] = [:]
         lastByID.reserveCapacity(last.data.count)
         for element in last.data {

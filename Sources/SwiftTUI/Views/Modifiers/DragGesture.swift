@@ -131,9 +131,10 @@ private final class DragGestureElement: Element {
         return self
     }
 
-    override func handleMouseEvent(_ event: MouseEvent) {
-        switch event.type {
-        case .pressed(.left):
+    override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+        guard event.button == .left else { return false }
+        switch event.phase {
+        case .began:
             startAbsolute = event.position
             lastValue = makeValue(at: event.position)
             didPassMinimum = minimumDistance == 0
@@ -141,11 +142,9 @@ private final class DragGestureElement: Element {
             if didPassMinimum {
                 onChanged?(lastValue!)
             }
-        case .move:
-            guard startAbsolute != nil else {
-                super.handleMouseEvent(event)
-                return
-            }
+            return true
+        case .moved:
+            guard startAbsolute != nil else { return false }
             let value = makeValue(at: event.position)
             lastValue = value
             if !didPassMinimum {
@@ -158,7 +157,8 @@ private final class DragGestureElement: Element {
             if didPassMinimum {
                 onChanged?(value)
             }
-        case .released(.left):
+            return true
+        case .ended:
             if window?.mouseCapture === self {
                 window?.mouseCapture = nil
             }
@@ -169,9 +169,20 @@ private final class DragGestureElement: Element {
             startAbsolute = nil
             lastValue = nil
             didPassMinimum = false
-        default:
-            super.handleMouseEvent(event)
+            return true
+        case .cancelled:
+            if window?.mouseCapture === self {
+                window?.mouseCapture = nil
+            }
+            startAbsolute = nil
+            lastValue = nil
+            didPassMinimum = false
+            return true
         }
+    }
+
+    override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
+        false
     }
 
     private func makeValue(at location: Position) -> DragGesture.Value {

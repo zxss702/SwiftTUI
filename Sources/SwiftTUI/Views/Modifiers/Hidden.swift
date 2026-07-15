@@ -17,11 +17,23 @@ private struct HiddenModifier<Content: View>: View, PrimitiveView, ModifierView 
     func buildNode(_ node: Node) {
         node.elements = WeakSet<Element>()
         node.addNode(at: 0, Node(view: content.view))
+        node.children[0].setSubtreeUpdateSuppressed(isHidden)
     }
 
     func updateNode(_ node: Node) {
         node.view = self
-        node.children[0].update(using: content.view)
+        let child = node.children[0]
+        let wasSuppressed = child.suppressUpdates
+        child.setSubtreeUpdateSuppressed(isHidden)
+        // Keep-alive pages: do not rebuild / re-register toolbar / run body while
+        // covered — that was storming TextEditor + ChatMainView after push.
+        if !isHidden {
+            child.update(using: content.view)
+            if wasSuppressed {
+                // Becoming visible again: ensure a fresh paint of the page.
+                node.root.application?.window.layer.invalidate()
+            }
+        }
         for control in node.elements?.values ?? [] {
             (control as! HiddenElement).isHidden = isHidden
         }
@@ -44,6 +56,9 @@ private struct HiddenModifier<Content: View>: View, PrimitiveView, ModifierView 
                 if isHidden != oldValue {
                     resignFocusIfNeeded()
                     layer.invalidate()
+                    if !isHidden {
+                        layer.rootRenderer?.application?.requestLayout()
+                    }
                 }
             }
         }
@@ -53,12 +68,16 @@ private struct HiddenModifier<Content: View>: View, PrimitiveView, ModifierView 
         }
 
         override func size(proposedSize: Size) -> Size {
+            // Still participate in layout measurement so ZStack keeps full-page size.
             children[0].size(proposedSize: proposedSize)
         }
 
         override func layout(size: Size) {
             super.layout(size: size)
-            children[0].layout(size: size)
+            // Skip laying out covered keep-alive pages (ScrollView offsets / dirty).
+            if !isHidden {
+                children[0].layout(size: size)
+            }
             resignFocusIfNeeded()
         }
 

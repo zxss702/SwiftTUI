@@ -217,6 +217,7 @@ final class TextFieldElement: Element {
     override func commitBindingIfNeeded() {
         guard bindingDirty else { return }
         bindingDirty = false
+        // Real Binding write: dependents must re-evaluate (onChange, derived layout).
         text.wrappedValue = cachedText
     }
 
@@ -249,6 +250,7 @@ final class TextFieldElement: Element {
         return true
     }
 
+    /// Text entry — the only controls that take keyboard first-responder focus.
     override var selectable: Bool { isEnabledFlag }
 
     override func size(proposedSize: Size) -> Size {
@@ -299,6 +301,17 @@ final class TextFieldElement: Element {
             stageLocalEdit()
             return
         }
+        if char == "\t" {
+            let spaces = Array("    ")
+            var chars = Array(cachedText)
+            chars.insert(contentsOf: spaces, at: cursorIndex)
+            cachedText = String(chars)
+            cursorIndex += spaces.count
+            stageLocalEdit()
+            return
+        }
+        if char.isASCII && char.isWhitespace { return }
+        if char.width == 0 { return }
         var chars = Array(cachedText)
         chars.insert(char, at: cursorIndex)
         cachedText = String(chars)
@@ -333,18 +346,24 @@ final class TextFieldElement: Element {
         super.handleKeyEvent(event)
     }
 
-    override func handleMouseEvent(_ event: MouseEvent) {
-        guard isEnabledFlag else { return }
-        if case .released(.left) = event.type {
+    override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+        guard isEnabledFlag, event.button == .left else { return false }
+        switch event.phase {
+        case .began, .ended:
             let local = event.position - absoluteFrame.position
             let col = max(0, local.column.intValue)
             cursorIndex = indexForVisibleColumn(col)
             maskSecureImmediately()
             ensureCursorVisible()
             layer.invalidate()
-        } else {
-            super.handleMouseEvent(event)
+            return true
+        case .moved, .cancelled:
+            return false
         }
+    }
+
+    override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
+        false
     }
 
     override var cursorPosition: Position? {
@@ -522,15 +541,26 @@ final class TextFieldElement: Element {
         var currentWidth = startCol
         for ch in string {
             let charWidth = ch.width
+            if charWidth <= 0 {
+                if ch == "\t", currentWidth < maxWidth {
+                    var cell = Cell(char: " ", foregroundColor: color)
+                    cell.attributes.faint = faint
+                    buffer.setCell(cell, at: Position(column: Extended(currentWidth), line: 0))
+                    currentWidth += 1
+                }
+                continue
+            }
             if currentWidth >= maxWidth { break }
             if currentWidth + charWidth > maxWidth { break }
             var cell = Cell(char: ch, foregroundColor: color)
             cell.attributes.faint = faint
             buffer.setCell(cell, at: Position(column: Extended(currentWidth), line: 0))
-            for w in 1 ..< charWidth {
-                var cont = Cell(char: "\u{0000}", foregroundColor: color)
-                cont.attributes.faint = faint
-                buffer.setCell(cont, at: Position(column: Extended(currentWidth + w), line: 0))
+            if charWidth > 1 {
+                for w in 1 ..< charWidth {
+                    var cont = Cell(char: "\u{0000}", foregroundColor: color)
+                    cont.attributes.faint = faint
+                    buffer.setCell(cont, at: Position(column: Extended(currentWidth + w), line: 0))
+                }
             }
             currentWidth += charWidth
         }

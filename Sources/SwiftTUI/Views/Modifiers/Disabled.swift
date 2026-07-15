@@ -87,6 +87,12 @@ private struct DisabledModifier<Content: View>: View, PrimitiveView, ModifierVie
             return self
         }
 
+        override func dispatchMouseEvent(_ event: MouseEvent) -> Bool {
+            guard absoluteFrame.contains(event.position) else { return false }
+            if isDisabled { return true }
+            return super.dispatchMouseEvent(event)
+        }
+
         override func handleEvent(_ char: Character) {
             if isDisabled { return }
             super.handleEvent(char)
@@ -95,11 +101,6 @@ private struct DisabledModifier<Content: View>: View, PrimitiveView, ModifierVie
         override func handleKeyEvent(_ event: KeyEvent) {
             if isDisabled { return }
             super.handleKeyEvent(event)
-        }
-
-        override func handleMouseEvent(_ event: MouseEvent) {
-            if isDisabled { return }
-            super.handleMouseEvent(event)
         }
 
         override var firstSelectableElement: Element? {

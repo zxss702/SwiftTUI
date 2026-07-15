@@ -40,6 +40,13 @@ import Foundation
         else {
             return
         }
+        // SwiftUI-shaped: writing an equal value must not re-render.
+        // (onHover rows fire `hovering = true` on every move — without this
+        // the row rebuilds per move and hover tracking dangles.)
+        if let old = node.state[slot] as? T, StateEquality.areEqual(old, newValue) {
+            node.state[slot] = newValue
+            return
+        }
         node.state[slot] = newValue
         if invalidate {
             node.root.application?.invalidateNode(node)
@@ -62,6 +69,11 @@ import Foundation
             },
             set: { newValue in
                 guard let node = reference.node, let slot = reference.slot else {
+                    return
+                }
+                // Same equal-value skip as `setValue` (Binding writes).
+                if let old = node.state[slot] as? T, StateEquality.areEqual(old, newValue) {
+                    node.state[slot] = newValue
                     return
                 }
                 node.state[slot] = newValue

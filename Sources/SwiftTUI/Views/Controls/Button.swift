@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - Button
+
 @MainActor public struct Button<Label: View>: View, PrimitiveView {
     let label: VStack<Label>
     let hover: () -> Void
@@ -62,14 +64,15 @@ import Foundation
         var hover: () -> Void
         var onActivate: (() -> Void)?
         var label: Element!
-        weak var buttonLayer: ButtonLayer?
 
         init(action: @escaping () -> Void, hover: @escaping () -> Void) {
             self.action = action
             self.hover = hover
         }
 
-        override var selectable: Bool { true }
+        /// Clickable but not a keyboard first-responder.
+        override var selectable: Bool { false }
+        override var claimsPointerCapture: Bool { true }
 
         override func size(proposedSize: Size) -> Size {
             return label.size(proposedSize: proposedSize)
@@ -86,23 +89,38 @@ import Foundation
             }
         }
 
-        override func handleMouseEvent(_ event: MouseEvent) {
-            if case .released(.left) = event.type {
-                performAction()
-            } else {
-                super.handleMouseEvent(event)
+        /// UIKit-inspired gesture: fire on `.ended` for the same hit-tested
+        /// owner that received `.began`. Terminal release coords often drift a
+        /// cell or two off the button — do **not** require `contains` (that
+        /// made clicks miss while tracking was true).
+        private var tracking = false
+
+        override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+            guard event.button == .left else { return false }
+            switch event.phase {
+            case .began:
+                tracking = true
+                return true
+            case .moved:
+                return tracking
+            case .ended:
+                let shouldFire = tracking
+                tracking = false
+                if shouldFire {
+                    performAction()
+                }
+                return true
+            case .cancelled:
+                tracking = false
+                return true
             }
         }
 
+        override func pointerGestureCancelled() {
+            tracking = false
+        }
+
         private func performAction() {
-            // #region agent log
-            DebugSessionLog.write(
-                hypothesisId: "E",
-                location: "ButtonElement.performAction",
-                message: "button fired",
-                data: ["hasOnActivate": onActivate != nil]
-            )
-            // #endregion
             if let onActivate {
                 onActivate()
             } else {
@@ -111,56 +129,7 @@ import Foundation
         }
 
         override func hoveredStateDidChange() {
-            buttonLayer?.highlighted = isHovered
             if isHovered { hover() }
-            layer.invalidate()
-        }
-
-        override func makeLayer() -> Layer {
-            let layer = ButtonLayer()
-            self.buttonLayer = layer
-            return layer
-        }
-    }
-
-    private class ButtonLayer: Layer {
-        var highlighted = false
-
-        override func draw(into buffer: inout ScreenBuffer) {
-            super.draw(into: &buffer)
-            guard highlighted else { return }
-            // VT path: `buffer.cell(at:)` is always nil — swap fg/bg on the back buffer.
-            if let vt = buffer.vtRenderer {
-                let origin = buffer.translation
-                for y in 0 ..< frame.size.height.intValue {
-                    for x in 0 ..< frame.size.width.intValue {
-                        let abs = Position(
-                            column: Extended(x) + origin.column,
-                            line: Extended(y) + origin.line
-                        )
-                        let vtPos = VTPosition(row: abs.line.intValue + 1, column: abs.column.intValue + 1)
-                        let cell = vt.back[vtPos]
-                        vt.back[vtPos] = VTCell(
-                            character: cell.character,
-                            style: VTStyle(
-                                foreground: cell.style.background,
-                                background: cell.style.foreground,
-                                attributes: cell.style.attributes
-                            )
-                        )
-                    }
-                }
-                return
-            }
-            for y in 0 ..< frame.size.height.intValue {
-                for x in 0 ..< frame.size.width.intValue {
-                    let pos = Position(column: Extended(x), line: Extended(y))
-                    if var cell = buffer.cell(at: pos) {
-                        cell.attributes.inverted.toggle()
-                        buffer.setCell(cell, at: pos)
-                    }
-                }
-            }
         }
     }
 }

@@ -152,7 +152,18 @@ private final class TextEditorElement: Element {
     override func commitBindingIfNeeded() {
         guard bindingDirty else { return }
         bindingDirty = false
+        // Real Binding write: dependents (`frame(maxHeight:)`, `onChange`, …)
+        // must see the new value and re-evaluate their body.
         text.wrappedValue = cachedText
+        // #region agent log
+        DebugSessionLog.write(
+            hypothesisId: "TE1",
+            location: "TextEditorElement.commitBindingIfNeeded",
+            message: "binding committed",
+            data: ["len": cachedText.count],
+            runId: "post-cleanup"
+        )
+        // #endregion
     }
 
     /// Returns true when cached text was replaced from an external Binding write.
@@ -161,6 +172,19 @@ private final class TextEditorElement: Element {
         if bindingDirty { return false }
         let newText = text.wrappedValue
         guard newText != cachedText else { return false }
+        // #region agent log
+        DebugSessionLog.write(
+            hypothesisId: "TE2",
+            location: "TextEditorElement.syncFromBinding",
+            message: "cache overwritten from Binding",
+            data: [
+                "wasLen": cachedText.count,
+                "newLen": newText.count,
+                "isFR": isFirstResponder,
+            ],
+            runId: "post-cleanup"
+        )
+        // #endregion
         let distance = cachedText.distance(from: cachedText.startIndex, to: min(cursorIndex, cachedText.endIndex))
         cachedText = newText
         cursorIndex = cachedText.index(
@@ -172,6 +196,7 @@ private final class TextEditorElement: Element {
         return true
     }
 
+    /// Text entry — the only controls that take keyboard first-responder focus.
     override var selectable: Bool { isEnabledFlag }
 
     override func size(proposedSize: Size) -> Size {
@@ -289,11 +314,21 @@ private final class TextEditorElement: Element {
             var x = 0
             for char in lineStr {
                 let cw = char.width
+                if cw <= 0 {
+                    // Tab / other ASCII controls report width 0; `1..<0` traps.
+                    if char == "\t" {
+                        buffer.setCell(Cell(char: " "), at: Position(column: Extended(x), line: Extended(y)))
+                        x += 1
+                    }
+                    continue
+                }
                 var cell = Cell(char: char)
                 if !isEnabledFlag { cell.attributes.faint = true }
                 buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
-                for w in 1..<cw {
-                    buffer.setCell(Cell(char: "\u{0000}"), at: Position(column: Extended(x + w), line: Extended(y)))
+                if cw > 1 {
+                    for w in 1..<cw {
+                        buffer.setCell(Cell(char: "\u{0000}"), at: Position(column: Extended(x + w), line: Extended(y)))
+                    }
                 }
                 x += cw
             }
@@ -391,6 +426,18 @@ private final class TextEditorElement: Element {
                 cachedText.insert("\n", at: cursorIndex)
                 cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + 1)
             }
+        } else if char == "\t" {
+            // Tab has Character.width == 0; inserting it crashes wide-char padding in draw.
+            let spaces = "    "
+            applyTextMutation {
+                let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+                cachedText.insert(contentsOf: spaces, at: cursorIndex)
+                cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + spaces.count)
+            }
+        } else if char.isASCII && char.isWhitespace {
+            return
+        } else if char.width == 0 {
+            return
         } else {
             applyTextMutation {
                 let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
@@ -400,8 +447,30 @@ private final class TextEditorElement: Element {
         }
     }
 
-    override func handleMouseEvent(_ event: MouseEvent) {
-        guard isEnabledFlag else { return }
+    override func pointerGesture(_ event: PointerGestureEvent) -> Bool {
+        guard isEnabledFlag, event.button == .left else { return false }
+        ensureVisualLines()
+        switch event.phase {
+        case .began, .moved, .ended:
+            placeCursor(at: event.position)
+            if event.phase == .began {
+                window?.mouseCapture = self
+            }
+            if event.phase == .ended, window?.mouseCapture === self {
+                window?.mouseCapture = nil
+            }
+            layer.invalidate()
+            return true
+        case .cancelled:
+            if window?.mouseCapture === self {
+                window?.mouseCapture = nil
+            }
+            return true
+        }
+    }
+
+    override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
+        guard isEnabledFlag else { return false }
         ensureVisualLines()
         switch event.type {
         case .scroll(_, let deltaY):
@@ -418,26 +487,9 @@ private final class TextEditorElement: Element {
                 cursorIndex = getIndex(forVisualPosition: contentOffset.intValue + frameHeight - 1, col: pos.col)
             }
             layer.invalidate()
-        case .pressed(.left):
-            placeCursor(at: event.position)
-            window?.mouseCapture = self
-            layer.invalidate()
-        case .move:
-            guard window?.mouseCapture === self else {
-                super.handleMouseEvent(event)
-                return
-            }
-            placeCursor(at: event.position)
-            layer.invalidate()
-        case .released(.left):
-            if window?.mouseCapture === self {
-                window?.mouseCapture = nil
-            }
-            // Final place in case release lands on a different cell than last move.
-            placeCursor(at: event.position)
-            layer.invalidate()
+            return true
         default:
-            super.handleMouseEvent(event)
+            return false
         }
     }
 

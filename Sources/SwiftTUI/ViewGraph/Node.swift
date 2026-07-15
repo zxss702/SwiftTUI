@@ -30,6 +30,29 @@ final class Node {
     var element: Element?
     weak var application: Application?
 
+    /// Set by `hidden(true)` keep-alive pages (NavigationStack). Observation may
+    /// still dirty these nodes, but the host skips `update` until visible again.
+    var suppressUpdates = false
+
+    /// True when this node or any ancestor is suppressed (new nodes under a
+    /// hidden page may not have the flag copied yet).
+    var isUpdateSuppressed: Bool {
+        var current: Node? = self
+        while let node = current {
+            if node.suppressUpdates { return true }
+            current = node.parent
+        }
+        return false
+    }
+
+    /// Propagate update suppression to the whole subtree (navigation keep-alive).
+    func setSubtreeUpdateSuppressed(_ suppressed: Bool) {
+        suppressUpdates = suppressed
+        for child in children {
+            child.setSubtreeUpdateSuppressed(suppressed)
+        }
+    }
+
     func invalidateEnvironmentCache() {
         environmentCacheValid = false
         cachedEnvironment = nil
