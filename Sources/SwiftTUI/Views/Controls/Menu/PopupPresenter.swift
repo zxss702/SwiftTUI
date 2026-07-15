@@ -741,14 +741,18 @@ private final class ModalFloatingElement: Element {
     }
 
     override func draw(into buffer: inout ScreenBuffer) {
-        // Scrim: paint faint spaces over the full window. Do not read-modify
-        // underlying cells — on the VT path `cell(at:)` is unavailable, and
-        // mutating prior glyphs caused navigation/sheet dismiss residue.
-        var scrim = Cell(char: " ")
-        scrim.attributes.faint = true
+        // Dim underlying UI in place — never overwrite glyphs with spaces
+        // (that wiped the root view and made sheets look like a blank wall).
+        let panel = entry.resolvedPanelFrame
+        let origin = layer.frame.position
         for y in 0 ..< layer.frame.size.height.intValue {
             for x in 0 ..< layer.frame.size.width.intValue {
-                buffer.setCell(scrim, at: Position(column: Extended(x), line: Extended(y)))
+                let abs = Position(
+                    column: origin.column + Extended(x),
+                    line: origin.line + Extended(y)
+                )
+                if let panel, panel.contains(abs) { continue }
+                buffer.dimCell(at: Position(column: Extended(x), line: Extended(y)))
             }
         }
     }

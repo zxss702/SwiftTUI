@@ -39,6 +39,43 @@ struct PresentationPipelineTests {
         #expect(!app.hasPendingCommitWork)
     }
 
+    @Test func sheetDimsUnderlyingGlyphsInsteadOfErasing() async throws {
+        struct Root: View {
+            @State var show = true
+            var body: some View {
+                // Pin underlay to the top-leading corner so the centered sheet
+                // panel does not paint over the probe glyph.
+                Text("UNDERLAY")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .sheet(isPresented: $show) {
+                        Text("sheet-body")
+                    }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare(size: Size(width: 40, height: 12))
+        #expect(findText(in: app.testing_rootElement, equalTo: "sheet-body") != nil)
+
+        let underlay = try #require(findText(in: app.testing_rootElement, equalTo: "UNDERLAY"))
+        let underPos = underlay.absoluteFrame.position
+        let panel = try #require(app.window.popupPresenter?.panelFrame)
+        #expect(
+            !panel.contains(underPos),
+            "probe must sit outside the sheet panel; under=\(underPos) panel=\(panel)"
+        )
+
+        var buffer = ScreenBuffer(rect: Rect(position: .zero, size: app.window.layer.frame.size))
+        app.window.layer.draw(into: &buffer)
+
+        let cell = try #require(buffer.cell(at: underPos))
+        #expect(
+            cell.char == "U",
+            "sheet scrim must keep underlay glyph, got '\(cell.char)' at \(underPos)"
+        )
+        #expect(cell.attributes.faint == true, "underlay outside panel should be dimmed")
+    }
+
     @Test func sheetContentRefreshesWhilePresented() async throws {
         struct Root: View {
             @State var show = false

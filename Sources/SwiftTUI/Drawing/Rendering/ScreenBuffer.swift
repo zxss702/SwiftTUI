@@ -124,6 +124,41 @@ struct ScreenBuffer {
         }
     }
 
+    /// Dim an already-drawn cell without replacing its glyph (sheet scrim).
+    /// VT `cell(at:)` cannot rebuild a TUI `Cell`, so this path reads the VT
+    /// back buffer / headless store directly and only inserts `.faint`.
+    mutating func dimCell(at position: Position) {
+        let finalPos = position + translation
+        guard clipRect.contains(finalPos) else { return }
+
+        let localPos = finalPos - rect.position
+        guard localPos.x >= 0, localPos.y >= 0,
+              localPos.x < rect.size.width.intValue, localPos.y < rect.size.height.intValue
+        else { return }
+
+        if let vt = vtRenderer {
+            let vtPos = VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)
+            let existing = vt.back[vtPos]
+            var attrs = existing.style.attributes
+            attrs.insert(.faint)
+            vt.back[vtPos] = VTCell(
+                character: existing.character,
+                style: VTStyle(
+                    foreground: existing.style.foreground,
+                    background: existing.style.background,
+                    attributes: attrs
+                )
+            )
+        } else if var cells {
+            let index = localPos.y * rect.size.width.intValue + localPos.x
+            guard index >= 0 && index < cells.count else { return }
+            var cell = cells[index] ?? Cell(char: " ")
+            cell.attributes.faint = true
+            cells[index] = cell
+            self.cells = cells
+        }
+    }
+
     /// Reads the character already drawn at `position` (both VT and headless
     /// paths). Returns `nil` when the position is clipped away. Wide-character
     /// continuation cells report `\u{0000}`.
