@@ -44,24 +44,77 @@ import Foundation
             self.geometry = geometry
         }
 
+        /// Publish finite proposed axes during measure so children see the real
+        /// stack/viewport width (not the `@State` placeholder `1`).
+        ///
+        /// When an axis is `.infinity` (typical inside vertical `ScrollView` /
+        /// `LazyVStack`), report the child's measured size on that axis so rows
+        /// are not clipped to a single line / infinite height.
         override func size(proposedSize: Size) -> Size {
-            return proposedSize
+            publishFiniteAxes(from: proposedSize)
+            let childProposal = Size(
+                width: proposedSize.width == .infinity
+                    ? geometry.wrappedValue.width
+                    : proposedSize.width,
+                height: proposedSize.height == .infinity
+                    ? .infinity
+                    : proposedSize.height
+            )
+            let childSize = children.isEmpty
+                ? Size.zero
+                : children[0].size(proposedSize: childProposal)
+            return Size(
+                width: proposedSize.width == .infinity ? childSize.width : proposedSize.width,
+                height: proposedSize.height == .infinity ? childSize.height : proposedSize.height
+            )
         }
 
         override func layout(size: Size) {
             super.layout(size: size)
-            // Publish size and sync-update the child tree *before* laying out children,
-            // so size-driven `if` branches switch in the same layout pass.
-            if geometry.wrappedValue != size {
-                geometry.setValue(size, invalidate: false)
-                if let node, let rebuildChild, !node.children.isEmpty {
-                    node.children[0].update(using: rebuildChild(size))
-                    syncChildElement()
-                }
+            // Never publish ∞ — `Extended.intValue` / `widthInt` would trap.
+            let published = Size(
+                width: size.width == .infinity ? max(geometry.wrappedValue.width, 1) : size.width,
+                height: size.height == .infinity ? max(geometry.wrappedValue.height, 1) : size.height
+            )
+            if geometry.wrappedValue != published {
+                geometry.setValue(published, invalidate: false)
+                rebuildContent(with: published)
             }
             if !children.isEmpty {
-                children[0].layout(size: size)
+                let childLayoutSize = Size(
+                    width: size.width == .infinity ? published.width : size.width,
+                    height: size.height == .infinity
+                        ? children[0].size(proposedSize: Size(width: published.width, height: .infinity)).height
+                        : size.height
+                )
+                children[0].layout(size: childLayoutSize)
             }
+        }
+
+        /// Copy finite proposed axes into `@State` and rebuild content before
+        /// measure continues. Critical inside ScrollView / LazyVStack: the first
+        /// `size(proposed:)` already knows the stack width, but body would
+        /// otherwise still close over the placeholder `width: 1`.
+        private func publishFiniteAxes(from proposed: Size) {
+            var next = geometry.wrappedValue
+            var changed = false
+            if proposed.width != .infinity, next.width != proposed.width {
+                next.width = proposed.width
+                changed = true
+            }
+            if proposed.height != .infinity, next.height != proposed.height {
+                next.height = proposed.height
+                changed = true
+            }
+            guard changed else { return }
+            geometry.setValue(next, invalidate: false)
+            rebuildContent(with: next)
+        }
+
+        private func rebuildContent(with size: Size) {
+            guard let node, let rebuildChild, !node.children.isEmpty else { return }
+            node.children[0].update(using: rebuildChild(size))
+            syncChildElement()
         }
 
         func syncChildElement() {
