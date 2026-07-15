@@ -29,8 +29,10 @@ import Foundation
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
+        let resolved = resolvedContent
         node.element = TextElement(
-            text: displayString,
+            text: resolved.string,
+            styledChars: resolved.styles,
             foregroundColor: foregroundColor,
             bold: bold,
             italic: italic,
@@ -48,7 +50,10 @@ import Foundation
         let previousText = control.text
         let previousLineLimit = control.lineLimit
         let previousTruncation = control.truncationMode
-        control.text = displayString
+        let resolved = resolvedContent
+        let stylesChanged = control.styledChars != resolved.styles
+        control.text = resolved.string
+        control.styledChars = resolved.styles
         control.foregroundColor = foregroundColor
         control.bold = bold
         control.italic = italic
@@ -73,7 +78,11 @@ import Foundation
                 node.root.application?.requestLayout()
             }
         }
-        control.layer.invalidate()
+        if stylesChanged || previousText != control.text {
+            control.layer.invalidate()
+        } else {
+            control.layer.invalidate()
+        }
     }
 
     private var displayString: String {
@@ -83,8 +92,16 @@ import Foundation
         return text ?? ""
     }
 
+    private var resolvedContent: (string: String, styles: [StyledChar]?) {
+        if #available(macOS 12, *), let attributedText {
+            return AttributedTextStyle.flatten(attributedText)
+        }
+        return (text ?? "", nil)
+    }
+
     private class TextElement: Element {
         var text: String
+        var styledChars: [StyledChar]?
         var foregroundColor: Color
         var bold: Bool
         var italic: Bool
@@ -93,10 +110,11 @@ import Foundation
         var lineLimit: Int?
         var truncationMode: Text.TruncationMode
 
-        private var cachedLines: [String] = []
+        private var cachedLines: [TextLayout.LaidOutLine] = []
 
         init(
             text: String,
+            styledChars: [StyledChar]?,
             foregroundColor: Color,
             bold: Bool,
             italic: Bool,
@@ -106,6 +124,7 @@ import Foundation
             truncationMode: Text.TruncationMode
         ) {
             self.text = text
+            self.styledChars = styledChars
             self.foregroundColor = foregroundColor
             self.bold = bold
             self.italic = italic
@@ -123,7 +142,7 @@ import Foundation
                 lineLimit: lineLimit,
                 truncationMode: truncationMode
             )
-            let contentWidth = cachedLines.map(\.width).max() ?? 0
+            let contentWidth = cachedLines.map(\.visualWidth).max() ?? 0
             let height = max(cachedLines.count, 1)
             return Size(width: Extended(contentWidth), height: Extended(height))
         }
@@ -142,7 +161,7 @@ import Foundation
         override func draw(into buffer: inout ScreenBuffer) {
             let maxWidth = layer.frame.size.width.intValue
             let maxHeight = layer.frame.size.height.intValue
-            let attributes = CellAttributes(
+            let envAttributes = CellAttributes(
                 bold: bold,
                 italic: italic,
                 underline: underline,
@@ -153,12 +172,19 @@ import Foundation
                 var currentWidth = 0
                 if lineIndex < cachedLines.count {
                     let line = cachedLines[lineIndex]
-                    for char in line {
+                    for unit in line.units {
+                        let char = unit.char
+                        let style = resolvedStyle(for: unit.sourceIndex, envAttributes: envAttributes)
                         let charWidth = char.width
                         if charWidth <= 0 {
                             if char == "\t", currentWidth < maxWidth {
                                 buffer.setCell(
-                                    Cell(char: " ", foregroundColor: foregroundColor, attributes: attributes),
+                                    Cell(
+                                        char: " ",
+                                        foregroundColor: style.foreground,
+                                        backgroundColor: style.background,
+                                        attributes: style.attributes
+                                    ),
                                     at: Position(column: Extended(currentWidth), line: Extended(lineIndex))
                                 )
                                 currentWidth += 1
@@ -167,13 +193,23 @@ import Foundation
                         }
                         if currentWidth + charWidth > maxWidth { break }
                         buffer.setCell(
-                            Cell(char: char, foregroundColor: foregroundColor, attributes: attributes),
+                            Cell(
+                                char: char,
+                                foregroundColor: style.foreground,
+                                backgroundColor: style.background,
+                                attributes: style.attributes
+                            ),
                             at: Position(column: Extended(currentWidth), line: Extended(lineIndex))
                         )
                         if charWidth > 1 {
                             for w in 1 ..< charWidth {
                                 buffer.setCell(
-                                    Cell(char: "\u{0000}", foregroundColor: foregroundColor, attributes: attributes),
+                                    Cell(
+                                        char: "\u{0000}",
+                                        foregroundColor: style.foreground,
+                                        backgroundColor: style.background,
+                                        attributes: style.attributes
+                                    ),
                                     at: Position(column: Extended(currentWidth + w), line: Extended(lineIndex))
                                 )
                             }
@@ -190,6 +226,31 @@ import Foundation
             }
         }
 
+        private func resolvedStyle(
+            for sourceIndex: Int?,
+            envAttributes: CellAttributes
+        ) -> (foreground: Color, background: Color?, attributes: CellAttributes) {
+            guard let sourceIndex,
+                  let styledChars,
+                  sourceIndex >= 0,
+                  sourceIndex < styledChars.count
+            else {
+                return (foregroundColor, nil, envAttributes)
+            }
+            let styled = styledChars[sourceIndex]
+            return (
+                styled.foreground ?? foregroundColor,
+                styled.background,
+                CellAttributes(
+                    bold: styled.bold ?? bold,
+                    italic: styled.italic ?? italic,
+                    underline: styled.underline ?? underline,
+                    strikethrough: styled.strikethrough ?? strikethrough,
+                    inverted: styled.inverted ?? false
+                )
+            )
+        }
+
         private func resolvedWidth(proposedSize: Size) -> Int {
             if proposedSize.width == .infinity {
                 // 无宽度约束时按单行完整内容测量；lineLimit 只限制高度行数
@@ -200,22 +261,106 @@ import Foundation
     }
 }
 
+// MARK: - Attributed style flattening
+
+struct StyledChar: Equatable {
+    var foreground: Color?
+    var background: Color?
+    var bold: Bool?
+    var italic: Bool?
+    var underline: Bool?
+    var strikethrough: Bool?
+    var inverted: Bool?
+
+    init(
+        foreground: Color? = nil,
+        background: Color? = nil,
+        bold: Bool? = nil,
+        italic: Bool? = nil,
+        underline: Bool? = nil,
+        strikethrough: Bool? = nil,
+        inverted: Bool? = nil
+    ) {
+        self.foreground = foreground
+        self.background = background
+        self.bold = bold
+        self.italic = italic
+        self.underline = underline
+        self.strikethrough = strikethrough
+        self.inverted = inverted
+    }
+}
+
+@available(macOS 12, *)
+enum AttributedTextStyle {
+    static func flatten(_ attributed: AttributedString) -> (string: String, styles: [StyledChar]?) {
+        let string = String(attributed.characters)
+        guard !string.isEmpty else { return (string, []) }
+
+        var styles: [StyledChar] = []
+        styles.reserveCapacity(attributed.characters.count)
+
+        for run in attributed.runs {
+            typealias Attr = AttributeScopes.SwiftTUIAttributes
+            let attrs = run.attributes
+            let style = StyledChar(
+                foreground: attrs[Attr.ForegroundColorAttribute.self],
+                background: attrs[Attr.BackgroundColorAttribute.self],
+                bold: attrs[Attr.BoldAttribute.self],
+                italic: attrs[Attr.ItalicAttribute.self],
+                underline: attrs[Attr.UnderlineAttribute.self],
+                strikethrough: attrs[Attr.StrikethroughAttribute.self],
+                inverted: attrs[Attr.InvertedAttribute.self]
+            )
+            let count = attributed[run.range].characters.count
+            for _ in 0 ..< count {
+                styles.append(style)
+            }
+        }
+
+        return (string, styles)
+    }
+}
+
 // MARK: - TextLayout
 
 enum TextLayout {
     static let ellipsis = "…"
+
+    struct LaidOutLine: Equatable {
+        struct Unit: Equatable {
+            let char: Character
+            /// Absolute Character index into the original string; `nil` for synthetic glyphs (ellipsis).
+            let sourceIndex: Int?
+        }
+
+        var units: [Unit]
+
+        var string: String { String(units.map(\.char)) }
+
+        var visualWidth: Int {
+            units.reduce(0) { partial, unit in
+                let w = unit.char.width
+                if w <= 0 { return unit.char == "\t" ? partial + 1 : partial }
+                return partial + w
+            }
+        }
+    }
 
     static func lines(
         for text: String,
         width: Int,
         lineLimit: Int?,
         truncationMode: Text.TruncationMode
-    ) -> [String] {
+    ) -> [LaidOutLine] {
         let width = max(width, 1)
-        let wrapped = wrap(text, width: width)
+        let sourceUnits: [LaidOutLine.Unit] = text.enumerated().map {
+            LaidOutLine.Unit(char: $0.element, sourceIndex: $0.offset)
+        }
+        let wrapped = wrap(sourceUnits, width: width)
 
         guard let limit = lineLimit else {
-            return wrapped.isEmpty ? [""] : wrapped
+            return wrapped.isEmpty ? [LaidOutLine(units: [])] : wrapped
         }
 
         if limit <= 0 {
@@ -228,101 +373,126 @@ enum TextLayout {
 
         switch truncationMode {
         case .tail:
-            return truncateTail(text: text, width: width, maxLines: limit)
+            return truncateTail(units: sourceUnits, width: width, maxLines: limit)
         case .head:
-            return truncateHead(text: text, width: width, maxLines: limit)
+            return truncateHead(units: sourceUnits, width: width, maxLines: limit)
         case .middle:
-            return truncateMiddle(text: text, width: width, maxLines: limit)
+            return truncateMiddle(units: sourceUnits, width: width, maxLines: limit)
         }
     }
 
     /// 按可视宽度软换行（支持显式 `\n`）。
     static func wrap(_ text: String, width: Int) -> [String] {
-        guard !text.isEmpty else { return [""] }
+        let units: [LaidOutLine.Unit] = text.enumerated().map {
+            LaidOutLine.Unit(char: $0.element, sourceIndex: $0.offset)
+        }
+        return wrap(units, width: width).map(\.string)
+    }
 
-        var lines: [String] = []
-        var current = ""
+    static func wrap(_ units: [LaidOutLine.Unit], width: Int) -> [LaidOutLine] {
+        guard !units.isEmpty else { return [LaidOutLine(units: [])] }
+
+        var lines: [LaidOutLine] = []
+        var current: [LaidOutLine.Unit] = []
         var currentWidth = 0
 
-        for char in text {
-            if char == "\n" {
-                lines.append(current)
-                current = ""
+        for unit in units {
+            if unit.char == "\n" {
+                lines.append(LaidOutLine(units: current))
+                current = []
                 currentWidth = 0
                 continue
             }
 
-            let charWidth = char.width
+            let charWidth = unit.char.width
             if currentWidth + charWidth > width, !current.isEmpty {
-                lines.append(current)
-                current = String(char)
+                lines.append(LaidOutLine(units: current))
+                current = [unit]
                 currentWidth = charWidth
             } else {
-                current.append(char)
+                current.append(unit)
                 currentWidth += charWidth
             }
         }
-        lines.append(current)
+        lines.append(LaidOutLine(units: current))
         return lines
     }
 
-    private static func truncateTail(text: String, width: Int, maxLines: Int) -> [String] {
+    private static func truncateTail(
+        units: [LaidOutLine.Unit],
+        width: Int,
+        maxLines: Int
+    ) -> [LaidOutLine] {
         let budget = max(width * maxLines - ellipsis.width, 0)
-        let prefix = prefixFitting(text, maxWidth: budget)
-        return capped(wrap(prefix + ellipsis, width: width), maxLines: maxLines)
+        let prefix = prefixFitting(units, maxWidth: budget)
+        let combined = prefix + ellipsisUnits()
+        return capped(wrap(combined, width: width), maxLines: maxLines)
     }
 
-    private static func truncateHead(text: String, width: Int, maxLines: Int) -> [String] {
+    private static func truncateHead(
+        units: [LaidOutLine.Unit],
+        width: Int,
+        maxLines: Int
+    ) -> [LaidOutLine] {
         let budget = max(width * maxLines - ellipsis.width, 0)
-        let suffix = suffixFitting(text, maxWidth: budget)
-        return capped(wrap(ellipsis + suffix, width: width), maxLines: maxLines)
+        let suffix = suffixFitting(units, maxWidth: budget)
+        let combined = ellipsisUnits() + suffix
+        return capped(wrap(combined, width: width), maxLines: maxLines)
     }
 
-    private static func truncateMiddle(text: String, width: Int, maxLines: Int) -> [String] {
+    private static func truncateMiddle(
+        units: [LaidOutLine.Unit],
+        width: Int,
+        maxLines: Int
+    ) -> [LaidOutLine] {
         let budget = max(width * maxLines - ellipsis.width, 0)
         let left = budget / 2
         let right = budget - left
-        let prefix = prefixFitting(text, maxWidth: left)
-        let suffix = suffixFitting(text, maxWidth: right)
-        return capped(wrap(prefix + ellipsis + suffix, width: width), maxLines: maxLines)
+        let prefix = prefixFitting(units, maxWidth: left)
+        let suffix = suffixFitting(units, maxWidth: right)
+        let combined = prefix + ellipsisUnits() + suffix
+        return capped(wrap(combined, width: width), maxLines: maxLines)
     }
 
-    private static func capped(_ lines: [String], maxLines: Int) -> [String] {
+    private static func ellipsisUnits() -> [LaidOutLine.Unit] {
+        TextLayout.ellipsis.map { LaidOutLine.Unit(char: $0, sourceIndex: nil) }
+    }
+
+    private static func capped(_ lines: [LaidOutLine], maxLines: Int) -> [LaidOutLine] {
         Array(lines.prefix(maxLines))
     }
 
-    private static func prefixFitting(_ string: String, maxWidth: Int) -> String {
-        var result = ""
+    private static func prefixFitting(_ units: [LaidOutLine.Unit], maxWidth: Int) -> [LaidOutLine.Unit] {
+        var result: [LaidOutLine.Unit] = []
         var width = 0
-        for char in string {
-            if char == "\n" {
-                // 换行占满当前视觉行剩余，这里按 1 宽计入预算以保持简单
+        for unit in units {
+            if unit.char == "\n" {
                 if width + 1 > maxWidth { break }
-                result.append(char)
+                result.append(unit)
                 width += 1
                 continue
             }
-            let charWidth = char.width
+            let charWidth = unit.char.width
             if width + charWidth > maxWidth { break }
-            result.append(char)
+            result.append(unit)
             width += charWidth
         }
         return result
     }
 
-    private static func suffixFitting(_ string: String, maxWidth: Int) -> String {
-        var result = ""
+    private static func suffixFitting(_ units: [LaidOutLine.Unit], maxWidth: Int) -> [LaidOutLine.Unit] {
+        var result: [LaidOutLine.Unit] = []
         var width = 0
-        for char in string.reversed() {
-            if char == "\n" {
+        for unit in units.reversed() {
+            if unit.char == "\n" {
                 if width + 1 > maxWidth { break }
-                result.insert(char, at: result.startIndex)
+                result.insert(unit, at: 0)
                 width += 1
                 continue
             }
-            let charWidth = char.width
+            let charWidth = unit.char.width
             if width + charWidth > maxWidth { break }
-            result.insert(char, at: result.startIndex)
+            result.insert(unit, at: 0)
             width += charWidth
         }
         return result

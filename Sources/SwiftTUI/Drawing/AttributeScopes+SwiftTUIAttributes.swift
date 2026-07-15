@@ -2,6 +2,8 @@ import Foundation
 
 @available(macOS 12, *)
 extension AttributeScopes {
+    public var swiftTUI: SwiftTUIAttributes.Type { SwiftTUIAttributes.self }
+
     public struct SwiftTUIAttributes: AttributeScope {
         public let backgroundColor = BackgroundColorAttribute()
         public let foregroundColor = ForegroundColorAttribute()

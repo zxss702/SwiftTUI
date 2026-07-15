@@ -106,22 +106,6 @@ struct InteractionIsolationTests {
         let item = try #require(findButtonLabeled("item", in: app.testing_rootElement))
         let itemPos = center(of: item)
         let panel = app.window.popupPresenter?.panelFrame
-        // #region agent log
-        DebugSessionLog.write(
-            hypothesisId: "H1",
-            location: "menuItemClickActivatesWhileOpen",
-            message: "pre-item-click geometry",
-            data: [
-                "itemPos": "\(itemPos.column),\(itemPos.line)",
-                "itemFrame": "\(item.absoluteFrame)",
-                "panelFrame": panel.map { "\($0)" } ?? "nil",
-                "cachedPanelFrame": app.window.popupPresenter?.top?.panelFrame.map { "\($0)" } ?? "nil",
-                "panelContains": panel?.contains(itemPos) ?? false,
-                "anchor": "\(app.window.popupPresenter?.anchor ?? .zero)",
-            ],
-            runId: "post-fix-21"
-        )
-        // #endregion
         let hit = app.testing_rootElement.hitTest(position: itemPos)
         let pointer = hit?.pointerTargetOnClick
         #expect(
@@ -183,21 +167,6 @@ struct InteractionIsolationTests {
 
         let confirm = try #require(findButtonLabeled("confirm", in: app.testing_rootElement))
         let confirmPos = center(of: confirm)
-        // #region agent log
-        DebugSessionLog.write(
-            hypothesisId: "H3",
-            location: "menuInsideHoveredButtonRowActivatesItem",
-            message: "pre-confirm geometry",
-            data: [
-                "confirmPos": "\(confirmPos.column),\(confirmPos.line)",
-                "confirmFrame": "\(confirm.absoluteFrame)",
-                "panelFrame": app.window.popupPresenter?.panelFrame.map { "\($0)" } ?? "nil",
-                "panelContains": app.window.popupPresenter?.panelFrame?.contains(confirmPos) ?? false,
-                "rowTaps": box.rowTaps,
-            ],
-            runId: "post-fix-22"
-        )
-        // #endregion
         try await clickAt(confirmPos, on: app)
         #expect(box.deleteTaps == 1, "confirm item must fire (deleteTaps=\(box.deleteTaps))")
         #expect(box.rowTaps == 0, "confirm must not fire outer row (rowTaps=\(box.rowTaps))")

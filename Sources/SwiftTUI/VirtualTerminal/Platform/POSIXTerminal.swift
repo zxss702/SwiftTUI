@@ -255,11 +255,6 @@ internal final actor POSIXTerminal: VTTerminal {
 
       let reader = Task {
         var parser = VTInputParser()
-        // #region agent log
-        var loggedFirstMotion = false
-        var loggedFirstPress = false
-        var rawMotionCount = 0
-        // #endregion
 
         while !Task.isCancelled && StdinReaderGate.owns(stdinGeneration) {
           do {
@@ -322,44 +317,6 @@ internal final actor POSIXTerminal: VTTerminal {
                     default: return nil
                     }
                   }
-                  // #region agent log
-                  // onHover-before-first-click: record the very first raw motion
-                  // the tty ever delivers, and at the first press record how many
-                  // motions preceded it (0 ⇒ terminal muted 1003 until click).
-                  if isMotion, !isWheel {
-                    rawMotionCount += 1
-                    if !loggedFirstMotion {
-                      loggedFirstMotion = true
-                      var tv = timeval()
-                      gettimeofday(&tv, nil)
-                      let ts = Int(tv.tv_sec) * 1000 + Int(tv.tv_usec) / 1000
-                      let line =
-                        "{\"sessionId\":\"dde3c6\",\"hypothesisId\":\"H1\",\"location\":\"POSIXTerminal.mouse\",\"message\":\"first raw motion from tty\",\"timestamp\":\(ts),\"runId\":\"post-cleanup\",\"data\":{\"gen\":\(stdinGeneration),\"button\":\(button),\"col\":\(column),\"row\":\(row)}}\n"
-                      line.withCString { cstr in
-                        let path = "/Users/zhiyang/开发/Packges/SwiftTUI/.cursor/debug-dde3c6.log"
-                        if let fp = fopen(path, "a") {
-                          fputs(cstr, fp)
-                          fclose(fp)
-                        }
-                      }
-                    }
-                  }
-                  if !isMotion, !isWheel, kind == "M", !loggedFirstPress {
-                    loggedFirstPress = true
-                    var tv = timeval()
-                    gettimeofday(&tv, nil)
-                    let ts = Int(tv.tv_sec) * 1000 + Int(tv.tv_usec) / 1000
-                    let line =
-                      "{\"sessionId\":\"dde3c6\",\"hypothesisId\":\"H1\",\"location\":\"POSIXTerminal.mouse\",\"message\":\"first raw press from tty\",\"timestamp\":\(ts),\"runId\":\"post-cleanup\",\"data\":{\"gen\":\(stdinGeneration),\"motionsBeforePress\":\(rawMotionCount)}}\n"
-                    line.withCString { cstr in
-                      let path = "/Users/zhiyang/开发/Packges/SwiftTUI/.cursor/debug-dde3c6.log"
-                      if let fp = fopen(path, "a") {
-                        fputs(cstr, fp)
-                        fclose(fp)
-                      }
-                    }
-                  }
-                  // #endregion
                   let evt = MouseEvent(
                     position: Position(x: column - 1, y: row - 1),
                     type: mouseType

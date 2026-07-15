@@ -30,9 +30,6 @@ public final class Application {
     /// Re-assert DECSET mouse modes once after the first click (some terminals
     /// only start 1003 motion after focus / first click).
     private var didReassertMouseModes = false
-    /// #region agent log
-    private var didLogFirstMove = false
-    /// #endregion
 
     /// TextField / TextEditor controls with staged Binding commits.
     private var pendingEditors: [ObjectIdentifier: Element] = [:]
@@ -406,19 +403,6 @@ public final class Application {
         let lightPopup =
             presenter?.isPresented == true && presenter?.blocksUnderlyingHits == false
         let inPopupPanel = presenter?.panelFrame?.contains(pos) ?? false
-
-        // #region agent log
-        if !didLogFirstMove, case .move = event.type {
-            didLogFirstMove = true
-            DebugSessionLog.write(
-                hypothesisId: "H1",
-                location: "Application.handleMouseInput",
-                message: "first move seen — 1003 active",
-                data: ["pos": "\(pos.column),\(pos.line)", "clickedBefore": didReassertMouseModes],
-                runId: "post-cleanup"
-            )
-        }
-        // #endregion
 
         // Light menu: press outside panel (not on anchor) dismisses.
         if lightPopup, case .pressed(.left) = event.type {

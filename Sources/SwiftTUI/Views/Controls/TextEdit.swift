@@ -155,15 +155,6 @@ private final class TextEditorElement: Element {
         // Real Binding write: dependents (`frame(maxHeight:)`, `onChange`, …)
         // must see the new value and re-evaluate their body.
         text.wrappedValue = cachedText
-        // #region agent log
-        DebugSessionLog.write(
-            hypothesisId: "TE1",
-            location: "TextEditorElement.commitBindingIfNeeded",
-            message: "binding committed",
-            data: ["len": cachedText.count],
-            runId: "post-cleanup"
-        )
-        // #endregion
     }
 
     /// Returns true when cached text was replaced from an external Binding write.
@@ -172,19 +163,6 @@ private final class TextEditorElement: Element {
         if bindingDirty { return false }
         let newText = text.wrappedValue
         guard newText != cachedText else { return false }
-        // #region agent log
-        DebugSessionLog.write(
-            hypothesisId: "TE2",
-            location: "TextEditorElement.syncFromBinding",
-            message: "cache overwritten from Binding",
-            data: [
-                "wasLen": cachedText.count,
-                "newLen": newText.count,
-                "isFR": isFirstResponder,
-            ],
-            runId: "post-cleanup"
-        )
-        // #endregion
         let distance = cachedText.distance(from: cachedText.startIndex, to: min(cursorIndex, cachedText.endIndex))
         cachedText = newText
         cursorIndex = cachedText.index(

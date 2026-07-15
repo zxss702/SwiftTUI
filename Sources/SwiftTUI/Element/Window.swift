@@ -93,19 +93,6 @@ struct WeakElementRef {
         // remain — they still owe a leave.
         let staleHoverPath = hoveredElement == nil && hoverPathRefs.contains { $0.value != nil }
         guard hoveredElement !== control || staleHoverPath else { return }
-        // #region agent log
-        DebugSessionLog.write(
-            hypothesisId: "H3",
-            location: "Window.setHoveredElement",
-            message: "hover transition",
-            data: [
-                "old": DebugSessionLog.typeName(hoveredElement),
-                "new": DebugSessionLog.typeName(control),
-                "staleOldPath": staleHoverPath,
-            ],
-            runId: "post-cleanup"
-        )
-        // #endregion
 
         func ancestors(from control: Element?) -> [Element] {
             var path: [Element] = []
