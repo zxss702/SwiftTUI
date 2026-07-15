@@ -412,7 +412,7 @@ private final class TextEditorElement: Element {
                 cachedText.insert(contentsOf: spaces, at: cursorIndex)
                 cursorIndex = cachedText.index(cachedText.startIndex, offsetBy: distance + spaces.count)
             }
-        } else if char.isASCII && char.isWhitespace {
+        } else if char.isASCII && char.isWhitespace && char != " " {
             return
         } else if char.width == 0 {
             return

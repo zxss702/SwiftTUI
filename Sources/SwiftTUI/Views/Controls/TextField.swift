@@ -302,7 +302,7 @@ final class TextFieldElement: Element {
             stageLocalEdit()
             return
         }
-        if char.isASCII && char.isWhitespace { return }
+        if char.isASCII && char.isWhitespace && char != " " { return }
         if char.width == 0 { return }
         var chars = Array(cachedText)
         chars.insert(char, at: cursorIndex)
