@@ -129,6 +129,78 @@ struct HostFrameTests {
         #expect(box.text == "abc", "got \(box.text.debugDescription) — keystrokes dropped or one-behind forever")
     }
 
+    /// Paste arrives as per-character key events; spaces must not be dropped.
+    @Test func textFieldPreservesSpaces() async throws {
+        final class Box: @unchecked Sendable {
+            var text = ""
+        }
+        let box = Box()
+
+        struct FieldView: View {
+            let binding: Binding<String>
+            var body: some View {
+                TextField("type", text: binding)
+            }
+        }
+
+        let binding = Binding(
+            get: { box.text },
+            set: { box.text = $0 }
+        )
+        let app = Application(rootView: FieldView(binding: binding))
+        try await app.testing_prepare()
+
+        let field = try #require(findTextField(in: app.testing_rootElement))
+        app.window.setFirstResponder(field)
+        try await app.testing_turn()
+
+        for ch in "a b" {
+            let event = VTEvent.key(
+                KeyEvent(character: ch, keycode: 0, modifiers: [], type: .press)
+            )
+            try await app.testing_turn(input: event)
+        }
+
+        try await app.testing_drainUntilIdle()
+        #expect(box.text == "a b", "spaces dropped: \(box.text.debugDescription)")
+    }
+
+    /// Same paste-as-key-events path as TextField.
+    @Test func textEditorPreservesSpaces() async throws {
+        final class Box: @unchecked Sendable {
+            var text = ""
+        }
+        let box = Box()
+
+        struct EditorView: View {
+            let binding: Binding<String>
+            var body: some View {
+                TextEditor(text: binding)
+            }
+        }
+
+        let binding = Binding(
+            get: { box.text },
+            set: { box.text = $0 }
+        )
+        let app = Application(rootView: EditorView(binding: binding))
+        try await app.testing_prepare()
+
+        let editor = try #require(findTextEditor(in: app.testing_rootElement))
+        app.window.setFirstResponder(editor)
+        try await app.testing_turn()
+
+        for ch in "a b" {
+            let event = VTEvent.key(
+                KeyEvent(character: ch, keycode: 0, modifiers: [], type: .press)
+            )
+            try await app.testing_turn(input: event)
+        }
+
+        try await app.testing_drainUntilIdle()
+        #expect(box.text == "a b", "spaces dropped: \(box.text.debugDescription)")
+    }
+
     @Test func stateToggleVisibleAfterOneCommit() async throws {
         let box = TapBox()
         let app = Application(rootView: TapView(onCount: { box.taps = $0 }))
@@ -279,6 +351,28 @@ struct HostFrameTests {
         #expect(
             findText(in: app.testing_rootElement, equalTo: "HomeTitle") != nil,
             "navigationTitle from onAppear missing after prepare — one-behind chrome"
+        )
+        #expect(!app.hasPendingCommitWork)
+    }
+
+    @Test func toolbarTitleMenuVisibleAfterPrepare() async throws {
+        struct Root: View {
+            var body: some View {
+                NavigationStack {
+                    Text("body")
+                        .navigationTitle("MenuTitle")
+                        .toolbarTitleMenu {
+                            Button("MenuAction") {}
+                        }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare()
+        #expect(
+            findButtonLabeled("MenuTitle", in: app.testing_rootElement) != nil,
+            "toolbarTitleMenu title trigger missing after prepare"
         )
         #expect(!app.hasPendingCommitWork)
     }
@@ -443,6 +537,18 @@ private func findTextField(in control: Element?) -> Element? {
 }
 
 @MainActor
+private func findTextEditor(in control: Element?) -> Element? {
+    guard let control else { return nil }
+    if String(describing: type(of: control)).contains("TextEditorElement") {
+        return control
+    }
+    for child in control.children {
+        if let found = findTextEditor(in: child) { return found }
+    }
+    return nil
+}
+
+@MainActor
 private func findButton(in control: Element?) -> Element? {
     guard let control else { return nil }
     let name = String(describing: type(of: control))
@@ -479,6 +585,18 @@ private func findText(in control: Element?, equalTo target: String) -> Element? 
     if textLabel(in: control) == target { return control }
     for child in control.children {
         if let found = findText(in: child, equalTo: target) { return found }
+    }
+    return nil
+}
+
+@MainActor
+private func findButtonLabeled(_ label: String, in root: Element?) -> Element? {
+    guard let root else { return nil }
+    if String(describing: type(of: root)).contains("Button"), textLabel(in: root) == label {
+        return root
+    }
+    for child in root.children {
+        if let found = findButtonLabeled(label, in: child) { return found }
     }
     return nil
 }
