@@ -194,11 +194,34 @@ struct NavigationRootID: Hashable {
         // Always replace slot views (AnyView identity); bump chrome only once per
         // page visit. Re-registering on every body eval (e.g. TextEditor @State)
         // used to invalidate NavigationBar continuously.
-        toolbars[id] = content
+        // Preserve titleMenu from `.toolbarTitleMenu` when the toolbar builder
+        // did not include `ToolbarTitleMenu`.
+        var merged = content
+        if merged.titleMenu == nil {
+            merged.titleMenu = toolbars[id]?.titleMenu
+        }
+        toolbars[id] = merged
         guard id == currentPageID else { return }
         guard chromePublishedForPage != id else { return }
         chromePublishedForPage = id
         toolbarEpoch &+= 1
+    }
+
+    /// 由页面 `.toolbarTitleMenu` 上报；与三槽合并，不互相覆盖。
+    func setTitleMenu(_ menu: AnyView, for id: AnyHashable) {
+        var content = toolbars[id] ?? .empty
+        let hadMenu = content.titleMenu != nil
+        content.titleMenu = menu
+        toolbars[id] = content
+        guard id == currentPageID else { return }
+        // First titleMenu this visit must refresh the bar even if slots already published.
+        if !hadMenu {
+            chromePublishedForPage = id
+            toolbarEpoch &+= 1
+        } else if chromePublishedForPage != id {
+            chromePublishedForPage = id
+            toolbarEpoch &+= 1
+        }
     }
 
     func toolbar(for id: AnyHashable) -> NavigationToolbarContent {

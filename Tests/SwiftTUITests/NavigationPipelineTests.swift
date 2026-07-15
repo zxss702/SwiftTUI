@@ -110,6 +110,122 @@ struct NavigationPipelineTests {
         #expect(!app.hasPendingCommitWork)
     }
 
+    @Test func toolbarTitleMenuTurnsTitleIntoMenu() async throws {
+        final class Box { var taps = 0 }
+        let box = Box()
+        struct Root: View {
+            let box: Box
+            var body: some View {
+                NavigationStack {
+                    Text("body")
+                        .navigationTitle("HomeTitle")
+                        .toolbarTitleMenu {
+                            Button("RenameAction") { box.taps += 1 }
+                        }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root(box: box))
+        try await app.testing_prepare()
+        #expect(findText(in: app.testing_rootElement, equalTo: "HomeTitle") != nil)
+        #expect(findButtonLabeled("RenameAction", in: app.testing_rootElement) == nil)
+
+        let title = try #require(findButtonLabeled("HomeTitle", in: app.testing_rootElement))
+        try await click(title, on: app)
+        #expect(app.window.popupPresenter?.isPresented == true)
+
+        let action = try #require(findButtonLabeled("RenameAction", in: app.testing_rootElement))
+        try await click(action, on: app)
+        #expect(box.taps == 1)
+        #expect(!app.hasPendingCommitWork)
+    }
+
+    @Test func toolbarTitleMenuClearsOnPushAndRestoresOnPop() async throws {
+        struct Root: View {
+            var body: some View {
+                NavigationStack {
+                    VStack {
+                        Text("home")
+                        NavigationLink("go", value: 1)
+                    }
+                    .navigationTitle("Home")
+                    .toolbarTitleMenu {
+                        Button("HomeMenuItem") {}
+                    }
+                    .navigationDestination(for: Int.self) { _ in
+                        Text("detail")
+                            .navigationTitle("Detail")
+                    }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare()
+        #expect(findButtonLabeled("Home", in: app.testing_rootElement) != nil)
+
+        try await click(try #require(findButtonLabeled("go", in: app.testing_rootElement)), on: app)
+        #expect(findText(in: app.testing_rootElement, equalTo: "Detail") != nil)
+        // Detail has no title menu — plain title text, not a menu trigger.
+        #expect(findButtonLabeled("Home", in: app.testing_rootElement) == nil)
+        #expect(findButtonLabeled("Detail", in: app.testing_rootElement) == nil)
+
+        let back = try #require(findButtonLabeled("⟨Home", in: app.testing_rootElement)
+            ?? findButtonLabeled("⟨返回", in: app.testing_rootElement))
+        try await click(back, on: app)
+        #expect(findButtonLabeled("Home", in: app.testing_rootElement) != nil)
+        #expect(!app.hasPendingCommitWork)
+    }
+
+    @Test func toolbarTitleMenuViaToolbarContent() async throws {
+        struct Root: View {
+            var body: some View {
+                NavigationStack {
+                    Text("body")
+                        .navigationTitle("ViaToolbar")
+                        .toolbar {
+                            ToolbarTitleMenu {
+                                Button("ViaMenuItem") {}
+                            }
+                        }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare()
+        let title = try #require(findButtonLabeled("ViaToolbar", in: app.testing_rootElement))
+        try await click(title, on: app)
+        #expect(findButtonLabeled("ViaMenuItem", in: app.testing_rootElement) != nil)
+        #expect(!app.hasPendingCommitWork)
+    }
+
+    @Test func principalOverridesToolbarTitleMenu() async throws {
+        struct Root: View {
+            var body: some View {
+                NavigationStack {
+                    Text("body")
+                        .navigationTitle("HiddenTitle")
+                        .toolbarTitleMenu {
+                            Button("ShouldNotOpen") {}
+                        }
+                        .toolbar {
+                            ToolbarItem(placement: .principal) {
+                                Text("PrincipalLabel")
+                            }
+                        }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare()
+        #expect(findText(in: app.testing_rootElement, equalTo: "PrincipalLabel") != nil)
+        #expect(findButtonLabeled("HiddenTitle", in: app.testing_rootElement) == nil)
+        #expect(!app.hasPendingCommitWork)
+    }
+
     @Test func hiddenPageReleasesFirstResponder() async throws {
         struct Root: View {
             var body: some View {

@@ -9,6 +9,13 @@ public extension View {
     ) -> some View {
         ToolbarModifierView(toolbar: content(), content: self)
     }
+
+    /// 将 `navigationTitle` 变成可下拉菜单，并定义菜单项。
+    func toolbarTitleMenu<MenuContent: View>(
+        @ViewBuilder content: () -> MenuContent
+    ) -> some View {
+        ToolbarTitleMenuModifierView(menu: content(), content: self)
+    }
 }
 
 // MARK: - Modifier
@@ -45,5 +52,37 @@ private struct ToolbarModifierView<Content: View, Toolbar: ToolbarContent>: View
         var storage = NavigationToolbarContent.empty
         (toolbar as? any _ToolbarContentCollectable)?.collect(into: &storage)
         context.setToolbar(storage, for: bound)
+    }
+}
+
+// MARK: - toolbarTitleMenu
+
+@MainActor
+private struct ToolbarTitleMenuModifierView<Content: View, MenuContent: View>: View, PrimitiveView {
+    let menu: MenuContent
+    let content: Content
+
+    static var size: Int? { Content.size }
+
+    func buildNode(_ node: Node) {
+        node.addNode(at: 0, Node(view: content.view))
+        registerTitleMenu(on: node)
+    }
+
+    func updateNode(_ node: Node) {
+        node.view = self
+        node.children[0].update(using: content.view)
+        registerTitleMenu(on: node)
+    }
+
+    private func registerTitleMenu(on node: Node) {
+        guard let context = node.resolvedEnvironment()[NavigationContext.self] else { return }
+        let boundPageKey = "navigation.boundPageID"
+        if node.storage[boundPageKey] == nil {
+            node.storage[boundPageKey] = context.currentPageID
+        }
+        guard let bound = node.storage[boundPageKey] as? AnyHashable else { return }
+        guard bound == context.currentPageID else { return }
+        context.setTitleMenu(AnyView(menu), for: bound)
     }
 }

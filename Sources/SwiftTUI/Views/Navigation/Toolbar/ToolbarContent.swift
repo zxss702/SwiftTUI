@@ -8,6 +8,8 @@ struct NavigationToolbarContent {
     var leading: AnyView?
     var principal: AnyView?
     var trailing: AnyView?
+    /// `.toolbarTitleMenu` / `ToolbarTitleMenu`：把 `navigationTitle` 变成可下拉菜单。
+    var titleMenu: AnyView?
 
     static let empty = NavigationToolbarContent()
 
@@ -68,6 +70,21 @@ extension ToolbarItem where ID == () {
     ) {
         self.placement = placement
         self.content = content()
+    }
+}
+
+// MARK: - ToolbarTitleMenu
+
+/// 导航标题下拉菜单内容；与 `.toolbarTitleMenu` 等价，可写在 `.toolbar { }` 里。
+@MainActor public struct ToolbarTitleMenu<Content: View>: ToolbarContent, _ToolbarContentCollectable {
+    let content: Content
+
+    public init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func collect(into storage: inout NavigationToolbarContent) {
+        storage.titleMenu = AnyView(content)
     }
 }
 

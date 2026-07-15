@@ -112,6 +112,14 @@ private struct NavigationBar: View {
     private func middle(toolbar: NavigationToolbarContent, title: String) -> some View {
         if let principal = toolbar.principal {
             principal
+        } else if let titleMenu = toolbar.titleMenu {
+            Menu {
+                titleMenu
+            } label: {
+                Text(title)
+                    .bold()
+                    .lineLimit(1)
+            }
         } else {
             Text(title)
                 .bold()
