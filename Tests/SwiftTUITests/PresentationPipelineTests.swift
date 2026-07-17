@@ -76,6 +76,45 @@ struct PresentationPipelineTests {
         #expect(cell.attributes.faint == true, "underlay outside panel should be dimmed")
     }
 
+    @Test func sheetWithoutTextFieldHidesUnderlayCaret() async throws {
+        struct Root: View {
+            @State var text = "hello"
+            @State var show = false
+            var body: some View {
+                VStack {
+                    TextField("x", text: $text)
+                    Button("open") { show = true }
+                }
+                .sheet(isPresented: $show) {
+                    Text("sheet-body")
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare(size: Size(width: 40, height: 12))
+        let field = try #require(findTextField(in: app.testing_rootElement))
+        app.window.setFirstResponder(field)
+        #expect(field.isFirstResponder)
+        #expect(field.absoluteCursorPosition != nil)
+
+        // Open sheet without resigning focus via `click`'s Button FR probe —
+        // the caret must clear because of the scrim, not because of the click helper.
+        let open = try #require(findButtonLabeled("open", in: app.testing_rootElement))
+        let pos = center(of: open)
+        try await app.testing_turn(input: .mouse(MouseEvent(position: pos, type: .pressed(.left))))
+        try await app.testing_turn(input: .mouse(MouseEvent(position: pos, type: .released(.left))))
+        try await app.testing_drainUntilIdle()
+        // stealFocus hops via HostClock.scheduleNextTurn
+        try await Task.sleep(for: .milliseconds(30))
+        try await app.testing_drainUntilIdle()
+
+        #expect(findText(in: app.testing_rootElement, equalTo: "sheet-body") != nil)
+        #expect(!field.isFirstResponder, "dimmed underlay must resign first responder")
+        #expect(field.absoluteCursorPosition == nil)
+        #expect(app.window.firstResponder == nil)
+    }
+
     @Test func sheetContentRefreshesWhilePresented() async throws {
         struct Root: View {
             @State var show = false
@@ -175,6 +214,18 @@ private func findButtonLabeled(_ label: String, in root: Element?) -> Element? {
     }
     for child in root.children {
         if let found = findButtonLabeled(label, in: child) { return found }
+    }
+    return nil
+}
+
+@MainActor
+private func findTextField(in control: Element?) -> Element? {
+    guard let control else { return nil }
+    if String(describing: type(of: control)).contains("TextFieldElement") {
+        return control
+    }
+    for child in control.children {
+        if let found = findTextField(in: child) { return found }
     }
     return nil
 }
