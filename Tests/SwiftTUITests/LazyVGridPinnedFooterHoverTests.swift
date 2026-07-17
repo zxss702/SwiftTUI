@@ -3,8 +3,7 @@ import Testing
 @testable import SwiftTUI
 
 /// Repro: pinned section footer + onHover inside ScrollView { LazyVGrid }.
-/// Mirrors Logorythia `SYAgentDiffLineView`: `Section {} footer: { … .onHover }`
-/// with cells as siblings (not inside the section).
+/// Mirrors Logorythia `SYAgentDiffLineView` / `SYDiffView`.
 @Suite(.serialized)
 @MainActor
 struct LazyVGridPinnedFooterHoverTests {
@@ -14,24 +13,19 @@ struct LazyVGridPinnedFooterHoverTests {
         var last: Bool?
     }
 
-    private func findLabeled(_ label: String, in root: Element?) -> Element? {
+    private func findTextElement(_ label: String, in root: Element?) -> Element? {
         guard let root else { return nil }
-        if textLabel(in: root) == label { return root }
+        if textOf(root) == label { return root }
         for child in root.children {
-            if let found = findLabeled(label, in: child) { return found }
+            if let found = findTextElement(label, in: child) { return found }
         }
         return nil
     }
 
-    private func textLabel(in control: Element) -> String? {
-        if let text = Mirror(reflecting: control).children
-            .first(where: { $0.label == "text" })?.value as? String {
-            return text
-        }
-        for child in control.children {
-            if let text = textLabel(in: child) { return text }
-        }
-        return nil
+    private func textOf(_ control: Element) -> String? {
+        Mirror(reflecting: control).children
+            .first(where: { $0.label == "text" })?
+            .value as? String
     }
 
     private func center(of control: Element) -> Position {
@@ -65,7 +59,7 @@ struct LazyVGridPinnedFooterHoverTests {
         return nil
     }
 
-    /// App-shaped: empty `Section {}` footer + sibling ForEach cells.
+    /// Empty `Section {}` footer — known-good baseline.
     @Test func emptySectionPinnedFooterOnHoverFires() async throws {
         let box = HoverBox()
         struct Root: View {
@@ -106,47 +100,19 @@ struct LazyVGridPinnedFooterHoverTests {
         let app = Application(rootView: Root(box: box))
         try await app.testing_prepare(size: Size(width: 40, height: 10))
 
-        let label = try #require(findLabeled("最新", in: app.testing_rootElement))
-        var walk: Element? = label
-        var chain: [String] = []
-        while let node = walk {
-            let t = String(describing: type(of: node))
-            chain.append("\(t) frame=\(node.absoluteFrame) parentNil=\(node.parent == nil)")
-            walk = node.parent
-        }
-        print("PARENT_CHAIN:\n" + chain.joined(separator: "\n"))
-        let onHover = findAncestor(of: label, named: "OnHover")
-        let chrome = findAncestor(of: label, named: "SectionChromeElement")
-        print("onHover=\(String(describing: onHover.map { type(of: $0) })) chrome=\(String(describing: chrome.map { type(of: $0) }))")
-        // Fall back: hover via SectionChrome if OnHover missing
-        let hoverTarget = onHover ?? chrome ?? label
-        let scroll = try #require(findScroll(in: app.testing_rootElement))
-
-        let footerFrame = hoverTarget.absoluteFrame
-        let scrollFrame = scroll.absoluteFrame
-        print("footerFrame=\(footerFrame) scrollFrame=\(scrollFrame)")
-        #expect(
-            footerFrame.size.height > 0 && footerFrame.size.width > 0,
-            "footer frame must be non-empty: \(footerFrame)"
-        )
-
-        let pos = center(of: hoverTarget)
-        let hit = app.testing_rootElement.hitTest(position: pos)
-        print("pos=\(pos) hit=\(String(describing: hit.map { type(of: $0) }))")
+        let label = try #require(findTextElement("最新", in: app.testing_rootElement))
+        let onHover = try #require(findAncestor(of: label, named: "OnHoverElement"))
+        let pos = center(of: onHover)
 
         try await app.testing_turn(
             input: .mouse(MouseEvent(position: pos, type: .move))
         )
         try await app.testing_drainUntilIdle()
-        print("events=\(box.events) last=\(String(describing: box.last))")
 
-        #expect(
-            box.events.contains(true),
-            "onHover(true) must fire; events=\(box.events) chain=\(chain) hit=\(String(describing: hit.map { type(of: $0) })) pos=\(pos) footer=\(footerFrame)"
-        )
+        #expect(box.events.contains(true), "events=\(box.events) frame=\(onHover.absoluteFrame)")
     }
 
-    /// Correct SwiftUI shape: cells live inside the same Section as the footer.
+    /// Cells live inside the same Section as the footer (SYDiffView shape).
     @Test func sectionWithCellsPinnedFooterOnHoverFires() async throws {
         let box = HoverBox()
         struct Root: View {
@@ -164,7 +130,7 @@ struct LazyVGridPinnedFooterHoverTests {
                                 Text("cell-\(i)")
                             }
                         } footer: {
-                            Text("最新")
+                            Text("时间戳")
                                 .onHover {
                                     box.events.append($0)
                                     box.last = $0
@@ -178,7 +144,7 @@ struct LazyVGridPinnedFooterHoverTests {
         let app = Application(rootView: Root(box: box))
         try await app.testing_prepare(size: Size(width: 40, height: 10))
 
-        let label = try #require(findLabeled("最新", in: app.testing_rootElement))
+        let label = try #require(findTextElement("时间戳", in: app.testing_rootElement))
         let onHover = try #require(findAncestor(of: label, named: "OnHoverElement"))
         let pos = center(of: onHover)
 
@@ -190,9 +156,153 @@ struct LazyVGridPinnedFooterHoverTests {
         #expect(box.events.contains(true), "events=\(box.events) frame=\(onHover.absoluteFrame)")
     }
 
-    /// After scroll, empty-band footer naturalY=0 should leave the viewport
-    /// (pin clamps to natural=0), while a real section footer should stay hittable
-    /// near the viewport bottom if layout re-runs.
+    /// Multiple non-empty sections — Logorythia history list shape.
+    @Test func multipleSectionFootersOnHoverFires() async throws {
+        let boxes = (0..<3).map { _ in HoverBox() }
+        struct Root: View {
+            let boxes: [HoverBox]
+            var body: some View {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible()),
+                            GridItem(.flexible()),
+                            GridItem(.flexible()),
+                            GridItem(.flexible()),
+                        ],
+                        alignment: .leading,
+                        spacing: 1,
+                        pinnedViews: .sectionFooters
+                    ) {
+                        Section {} footer: {
+                            Text("最新")
+                        }
+                        ForEach(0..<3, id: \.self) { section in
+                            Section {
+                                ForEach(0..<8, id: \.self) { i in
+                                    Text("s\(section)-c\(i)")
+                                }
+                            } footer: {
+                                Text("foot-\(section)")
+                                    .onHover {
+                                        boxes[section].events.append($0)
+                                        boxes[section].last = $0
+                                    }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root(boxes: boxes))
+        try await app.testing_prepare(size: Size(width: 60, height: 16))
+
+        // Hover each section footer that is currently mounted.
+        for section in 0..<3 {
+            let label = findTextElement("foot-\(section)", in: app.testing_rootElement)
+            guard let label else { continue }
+            let onHover = try #require(findAncestor(of: label, named: "OnHoverElement"))
+            boxes[section].events.removeAll()
+            let pos = center(of: onHover)
+            try await app.testing_turn(
+                input: .mouse(MouseEvent(position: pos, type: .move))
+            )
+            try await app.testing_drainUntilIdle()
+            #expect(
+                boxes[section].events.contains(true),
+                "section \(section) onHover failed; events=\(boxes[section].events) frame=\(onHover.absoluteFrame) hit=\(String(describing: app.testing_rootElement.hitTest(position: pos).map { type(of: $0) }))"
+            )
+        }
+
+        #expect(
+            boxes.contains(where: { $0.events.contains(true) }),
+            "at least one mounted footer must accept hover"
+        )
+    }
+
+
+    /// Real app shape: `if isHover { … }` truly inserts/removes from the tree
+    /// (not `.hidden`). Hover(true) must survive the footer remount.
+    @Test func sectionFooterHoverSurvivesConditionalMenu() async throws {
+        let box = HoverBox()
+        struct Root: View {
+            let box: HoverBox
+            @State var isHover = false
+            var body: some View {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible()),
+                            GridItem(.flexible()),
+                            GridItem(.flexible()),
+                            GridItem(.flexible()),
+                        ],
+                        alignment: .leading,
+                        spacing: 1,
+                        pinnedViews: .sectionFooters
+                    ) {
+                        Section {
+                            ForEach(0..<8, id: \.self) { i in
+                                Text("file-\(i)")
+                            }
+                        } footer: {
+                            HStack {
+                                GeometryReader { size in
+                                    Text(String(repeating: "─", count: size.widthInt))
+                                }
+                                .frame(maxWidth: .infinity)
+
+                                Text("时间戳")
+
+                                GeometryReader { size in
+                                    Text(String(repeating: "─", count: size.widthInt))
+                                }
+                                .frame(maxWidth: .infinity)
+
+                                if isHover {
+                                    Text("切换至此")
+                                }
+                            }
+                            .onHover {
+                                box.events.append($0)
+                                box.last = $0
+                                isHover = $0
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root(box: box))
+        try await app.testing_prepare(size: Size(width: 60, height: 12))
+
+        let label = try #require(findTextElement("时间戳", in: app.testing_rootElement))
+        let onHover = try #require(findAncestor(of: label, named: "OnHoverElement"))
+        let pos = center(of: onHover)
+
+        try await app.testing_turn(
+            input: .mouse(MouseEvent(position: pos, type: .move))
+        )
+        try await app.testing_drainUntilIdle()
+
+        #expect(box.events.contains(true), "initial hover true; events=\(box.events)")
+        #expect(box.last == true, "must stay hovered after if-insert remount; events=\(box.events) last=\(String(describing: box.last))")
+        // Menu/button must actually appear in the tree (not merely hidden).
+        #expect(findTextElement("切换至此", in: app.testing_rootElement) != nil)
+
+        let label2 = try #require(findTextElement("时间戳", in: app.testing_rootElement))
+        let onHover2 = try #require(findAncestor(of: label2, named: "OnHoverElement"))
+        let pos2 = center(of: onHover2)
+        try await app.testing_turn(
+            input: .mouse(MouseEvent(position: pos2, type: .move))
+        )
+        try await app.testing_drainUntilIdle()
+        #expect(box.last == true, "after second move; events=\(box.events)")
+    }
+
+    /// After scroll, empty-band footer naturalY=0 should leave the viewport.
     @Test func emptySectionFooterDoesNotStickAfterScroll() async throws {
         let box = HoverBox()
         struct Root: View {
@@ -234,9 +344,7 @@ struct LazyVGridPinnedFooterHoverTests {
         }
         try await app.testing_drainUntilIdle()
 
-        let label = findLabeled("最新", in: app.testing_rootElement)
-        // Empty-section footer band is only ~1 row tall; after scroll it should
-        // unload or sit above the viewport — not stick as a true pinned footer.
+        let label = findTextElement("最新", in: app.testing_rootElement)
         if let label {
             let onHover = findAncestor(of: label, named: "OnHoverElement")
             let frame = onHover?.absoluteFrame ?? .zero
