@@ -131,6 +131,15 @@ import Foundation
                 measuredHeights.removeValue(forKey: key)
             }
             if let contentNode {
+                let swappingIdentity = loadedElements.contains { i, ctrl in
+                    contentNode.element(at: i) !== ctrl
+                }
+                let window = root.window
+                let previousSuppress = window?.suppressHoverResign ?? false
+                if swappingIdentity {
+                    window?.suppressHoverResign = true
+                }
+                defer { window?.suppressHoverResign = previousSuppress }
                 for (i, ctrl) in loadedElements {
                     let expected = contentNode.element(at: i)
                     if ctrl !== expected {

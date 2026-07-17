@@ -28,6 +28,12 @@ struct WeakElementRef {
     /// Hover leaf frozen under an open presentation (skipped leave); cleared on dismiss sync.
     private weak var presentationFrozenHover: Element?
 
+    /// When true, `resignInteraction` skips clearing hover. Lazy containers use this
+    /// while swapping same-index element identities (e.g. `if isHover { Menu }`
+    /// rebuild); Application re-hit-tests at end of the update so enter/leave stay
+    /// coherent without a false leave clearing `@State`.
+    var suppressHoverResign = false
+
     /// 拖动手势等：按下后捕获 move/release，避免 hitTest 随光标漂移。
     weak var mouseCapture: Element?
 
@@ -164,7 +170,8 @@ struct WeakElementRef {
             setFirstResponder(next)
         }
 
-        if let hovered = hoveredElement,
+        if !suppressHoverResign,
+           let hovered = hoveredElement,
            hovered === subtree || hovered.isDescendant(of: subtree) {
             setHoveredElement(nil)
         }

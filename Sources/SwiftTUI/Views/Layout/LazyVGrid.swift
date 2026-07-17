@@ -146,6 +146,17 @@ import Foundation
                 remounted = true
             }
             if let contentNode {
+                let swappingIdentity = loadedElements.contains { i, ctrl in
+                    contentNode.element(at: i) !== ctrl
+                }
+                // Same-index identity swap (footer gains/loses Menu) must not
+                // synthesize onHover(false) — Application re-resolves hover after layout.
+                let window = root.window
+                let previousSuppress = window?.suppressHoverResign ?? false
+                if swappingIdentity {
+                    window?.suppressHoverResign = true
+                }
+                defer { window?.suppressHoverResign = previousSuppress }
                 for (i, ctrl) in loadedElements {
                     let expected = contentNode.element(at: i)
                     if ctrl !== expected {
