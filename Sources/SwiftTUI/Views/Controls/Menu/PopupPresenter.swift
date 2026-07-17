@@ -79,6 +79,12 @@ public final class PopupPresenter {
     @ObservationIgnored
     weak var focusBeforePresentation: Element?
 
+    /// Host window — set by `Application` so focus steals work before the
+    /// floating host Element is parented into the tree (`control.window` is
+    /// still nil during `buildNode`).
+    @ObservationIgnored
+    weak var hostWindow: Window?
+
     /// 顶层 id（兼容旧逻辑 / modifier session）。
     var presentationID: UUID? { stack.last?.id }
 
@@ -312,7 +318,7 @@ public final class PopupPresenter {
 
     private func restoreFocus(afterDismissToWindow window: Window?) {
         if let control = stack.last?.hostElement {
-            stealFocus(control)
+            stealFocus(control, presenter: self)
             return
         }
         // 栈空：优先还给 present 前的焦点（例如 TextEditor），避免总是跳到第一个 Button。
@@ -431,7 +437,7 @@ private struct FloatingPopupLayer: View, PrimitiveView {
         entry.panelElement = control.panelElement
         entry.hostElement = control
         node.element = control
-        stealFocus(control)
+        stealFocus(control, presenter: presenter)
     }
 
     func updateNode(_ node: Node) {
@@ -539,7 +545,7 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
         entry.panelElement = control.panelElement
         entry.hostElement = control
         node.element = control
-        stealFocus(control)
+        stealFocus(control, presenter: presenter)
     }
 
     func updateNode(_ node: Node) {
@@ -690,7 +696,7 @@ private struct ModalFloatingLayer: View, PrimitiveView {
         entry.panelElement = control.panelElement
         entry.hostElement = control
         node.element = control
-        stealFocus(control)
+        stealFocus(control, presenter: presenter)
     }
 
     func updateNode(_ node: Node) {
@@ -797,12 +803,14 @@ private final class ModalFloatingElement: Element {
 // MARK: - Focus helper
 
 @MainActor
-private func stealFocus(_ control: Element) {
-    guard let window = control.window else { return }
+private func stealFocus(_ control: Element, presenter: PopupPresenter) {
+    // Prefer the live window; fall back to presenter's host while the floating
+    // element is still being parented (`control.window` is nil in `buildNode`).
+    guard let window = control.window ?? presenter.hostWindow else { return }
+
     // Remember pre-presentation text focus once per stack life. Presentation
     // chrome itself is never firstResponder (SwiftUI-shaped: only text inputs).
-    if let presenter = window.popupPresenter,
-       presenter.focusBeforePresentation == nil,
+    if presenter.focusBeforePresentation == nil,
        let fr = window.firstResponder,
        fr.canReceiveFocus,
        !fr.isDescendant(of: control)
@@ -811,13 +819,23 @@ private func stealFocus(_ control: Element) {
     }
     // Move focus only when the sheet/popover contains a text field; menus leave
     // FR alone (Application routes Escape / keys to the host while open).
-    guard let textInput = control.firstSelectableElement else { return }
-    if let clock = window.layer.rootRenderer?.application?.clock {
-        clock.scheduleNextTurn {
+    let apply: @MainActor () -> Void = {
+        if let textInput = control.firstSelectableElement {
             window.setFirstResponder(textInput)
+            return
         }
+        // Sheet / alert dim the underlay — drop the soft caret even when nothing
+        // inside the panel claims focus (restore via focusBeforePresentation).
+        guard presenter.top?.hostElement === control,
+              presenter.blocksUnderlyingHits,
+              window.firstResponder != nil
+        else { return }
+        window.setFirstResponder(nil)
+    }
+    if let clock = window.layer.rootRenderer?.application?.clock {
+        clock.scheduleNextTurn(apply)
     } else {
-        window.setFirstResponder(textInput)
+        apply()
     }
 }
 

@@ -72,6 +72,7 @@ public final class Application {
         rootElement = node.element!
         window = Window()
         window.popupPresenter = popupPresenter
+        popupPresenter.hostWindow = window
         window.addElement(rootElement)
         window.setFirstResponder(rootElement.firstSelectableElement)
 
@@ -663,11 +664,13 @@ public final class Application {
         guard let vtRenderer else { return }
 
         let softCursor: VTPosition?
-        if let absPos = window.firstResponder?.absoluteCursorPosition,
+        if let fr = window.firstResponder,
+           let absPos = fr.absoluteCursorPosition,
            absPos.line >= 0,
            absPos.column >= 0,
            absPos.line < window.layer.frame.size.height,
-           absPos.column < window.layer.frame.size.width
+           absPos.column < window.layer.frame.size.width,
+           softCursorAllowed(for: fr)
         {
             softCursor = VTPosition(
                 row: absPos.line.intValue + 1,
@@ -682,6 +685,16 @@ public final class Application {
 
         guard force || cursorChanged else { return }
         await vtRenderer.present(cursor: softCursor)
+    }
+
+    /// Sheet / alert grey out the underlay — never park the HW caret on dimmed content.
+    private func softCursorAllowed(for firstResponder: Element) -> Bool {
+        guard let presenter = window.popupPresenter,
+              presenter.isPresented,
+              presenter.blocksUnderlyingHits,
+              let host = presenter.top?.hostElement
+        else { return true }
+        return firstResponder === host || firstResponder.isDescendant(of: host)
     }
 
     func updateWindowSize(size: Size) {
