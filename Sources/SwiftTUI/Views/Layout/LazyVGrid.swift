@@ -686,8 +686,28 @@ import Foundation
                 }
             }
 
-            // Raise pinned chrome in subview order so they draw above cells.
-            for index in chromeIndices {
+            // Raise only viewport-owned sticky chrome so draw/hit-test stays above
+            // cells — do NOT lift every loaded footer (that stacked footers in the
+            // same paint layer and stole hover from natural-position footers).
+            let pinOwners: Set<Int> = {
+                var owners: Set<Int> = []
+                for section in sections {
+                    if pinnedViews.contains(.sectionHeaders),
+                       let h = section.headerIndex,
+                       isHeaderPinOwner(section, viewportTop: viewportTop, viewportBottom: viewportBottom)
+                    {
+                        owners.insert(h)
+                    }
+                    if pinnedViews.contains(.sectionFooters),
+                       let f = section.footerIndex,
+                       isFooterPinOwner(section, viewportTop: viewportTop, viewportBottom: viewportBottom)
+                    {
+                        owners.insert(f)
+                    }
+                }
+                return owners
+            }()
+            for index in chromeIndices where pinOwners.contains(index) {
                 guard let control = loadedElements[index],
                       let idx = children.firstIndex(where: { $0 === control }) else { continue }
                 if idx != children.count - 1 {
