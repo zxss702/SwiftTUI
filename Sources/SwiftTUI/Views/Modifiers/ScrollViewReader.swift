@@ -103,6 +103,9 @@ private struct ScrollViewReaderHost<Content: View>: View, PrimitiveView {
         control.contentElement = node.children[0].element(at: 0)
         control.addSubview(control.contentElement, at: 0)
         node.element = control
+        // 内容构建过程中触发的（如 onChange initial）滚动此时 contentElement 尚未就绪，
+        // 会被暂存为 pending，构建完成后在此统一执行。
+        control.flushPendingScroll()
     }
 
     func updateNode(_ node: Node) {
@@ -116,6 +119,7 @@ private struct ScrollViewReaderHost<Content: View>: View, PrimitiveView {
         let newContent = node.children[0].element(at: 0)
         control.contentElement = newContent
         control.syncChild(newContent)
+        control.flushPendingScroll()
     }
 }
 
@@ -123,6 +127,9 @@ private struct ScrollViewReaderHost<Content: View>: View, PrimitiveView {
 private final class ScrollViewReaderElement: Element, ScrollToIdentityBridging {
     var proxy: ScrollViewProxy!
     var contentElement: Element!
+
+    /// 内容尚未构建完成时收到的滚动请求，稍后 `flushPendingScroll()` 补执行。
+    private var pendingScroll: (id: AnyHashable, anchor: UnitPoint?)?
 
     override func size(proposedSize: Size) -> Size {
         contentElement.size(proposedSize: proposedSize)
@@ -134,6 +141,11 @@ private final class ScrollViewReaderElement: Element, ScrollToIdentityBridging {
     }
 
     func scrollToIdentity(_ id: AnyHashable, anchor: UnitPoint?) {
+        // 内容元素还未就绪（例如 onChange initial 在内容构建期间触发）：暂存，稍后补执行。
+        guard let contentElement else {
+            pendingScroll = (id, anchor)
+            return
+        }
         // Prefer a ScrollView that actually contains the target when it is
         // already materialized.
         if let target = findIdentity(id, in: contentElement),
@@ -147,6 +159,12 @@ private final class ScrollViewReaderElement: Element, ScrollToIdentityBridging {
         if let scroll = findScrollDescendant(in: contentElement) {
             scroll.scrollToIdentity(id, anchor: anchor)
         }
+    }
+
+    func flushPendingScroll() {
+        guard contentElement != nil, let pending = pendingScroll else { return }
+        pendingScroll = nil
+        scrollToIdentity(pending.id, anchor: pending.anchor)
     }
 
     private func findIdentity(_ id: AnyHashable, in control: Element) -> IdentityAnchorElement? {

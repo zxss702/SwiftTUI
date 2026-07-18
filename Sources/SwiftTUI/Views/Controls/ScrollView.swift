@@ -37,20 +37,7 @@ import Foundation
         var contentOffset: Extended = 0
 
         func scrollToIdentity(_ id: AnyHashable, anchor: UnitPoint?) {
-            let contentY: Extended
-            let targetHeight: Extended
-            if let target = ScrollIdentityLookup.findIdentity(id, in: contentElement) {
-                let contentOrigin = contentElement.absoluteFrame.position.line
-                contentY = target.absoluteFrame.position.line - contentOrigin
-                targetHeight = max(Extended(1), target.absoluteFrame.size.height)
-            } else if let estimated = ScrollIdentityLookup.lazyContentOffset(for: id, in: contentElement) {
-                contentY = estimated
-                targetHeight = 1
-            } else {
-                return
-            }
-
-            pendingScroll = PendingScroll(contentY: contentY, targetHeight: targetHeight, anchor: anchor)
+            pendingScroll = PendingScroll(id: id, anchor: anchor)
             // Avoid re-entering layout from `onAppear` / child layout callbacks.
             if !isLayingOut {
                 applyPendingScroll()
@@ -58,8 +45,7 @@ import Foundation
         }
 
         private struct PendingScroll {
-            var contentY: Extended
-            var targetHeight: Extended
+            var id: AnyHashable
             var anchor: UnitPoint?
         }
 
@@ -83,10 +69,25 @@ import Foundation
             guard let pending = pendingScroll else { return }
             let viewport = layer.frame.size.height
             guard viewport > 0 else { return }
+            // Re-resolve the target position now that layout is complete, so
+            // that calls originating from `onAppear` (fired during super.layout)
+            // use fresh absoluteFrame coordinates rather than pre-layout values.
+            let contentY: Extended
+            let targetHeight: Extended
+            if let target = ScrollIdentityLookup.findIdentity(pending.id, in: contentElement) {
+                let contentOrigin = contentElement.absoluteFrame.position.line
+                contentY = target.absoluteFrame.position.line - contentOrigin
+                targetHeight = max(Extended(1), target.absoluteFrame.size.height)
+            } else if let estimated = ScrollIdentityLookup.lazyContentOffset(for: pending.id, in: contentElement) {
+                contentY = estimated
+                targetHeight = 1
+            } else {
+                return
+            }
             pendingScroll = nil
             contentOffset = Self.offset(
-                contentY: pending.contentY,
-                targetHeight: pending.targetHeight,
+                contentY: contentY,
+                targetHeight: targetHeight,
                 viewportHeight: viewport,
                 anchor: pending.anchor
             )
