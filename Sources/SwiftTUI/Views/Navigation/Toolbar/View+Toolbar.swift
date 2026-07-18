@@ -50,7 +50,7 @@ private struct ToolbarModifierView<Content: View, Toolbar: ToolbarContent>: View
         guard bound == context.currentPageID else { return }
 
         var storage = NavigationToolbarContent.empty
-        (toolbar as? any _ToolbarContentCollectable)?.collect(into: &storage)
+        collectToolbarContent(toolbar, into: &storage)
         context.setToolbar(storage, for: bound)
     }
 }
