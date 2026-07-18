@@ -24,10 +24,13 @@ import Foundation
 
     func buildNode(_ node: Node) {
         setupStateProperties(node: node)
-        node.addNode(at: 0, Node(view: VStack(content: content(max(width, 1)))))
+        let childView = node.observing { VStack(content: content(max(width, 1))).view }
+        node.addNode(at: 0, Node(view: childView))
         let element = WidthReaderElement(width: _width)
         element.node = node
-        element.rebuild = { [content] w in VStack(content: content(w)).view }
+        element.rebuild = { [content] w in
+            node.observing { VStack(content: content(w)).view }
+        }
         node.element = element
         element.addSubview(node.children[0].element(at: 0), at: 0)
     }
@@ -37,8 +40,11 @@ import Foundation
         node.view = self
         let element = node.element as! WidthReaderElement
         element.node = node
-        element.rebuild = { [content] w in VStack(content: content(w)).view }
-        node.children[0].update(using: VStack(content: content(max(width, 1))))
+        element.rebuild = { [content] w in
+            node.observing { VStack(content: content(w)).view }
+        }
+        let childView = node.observing { VStack(content: content(max(width, 1))).view }
+        node.children[0].update(using: childView)
         element.syncChildElement()
     }
 

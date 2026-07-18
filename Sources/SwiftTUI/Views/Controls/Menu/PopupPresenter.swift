@@ -431,7 +431,8 @@ private struct FloatingPopupLayer: View, PrimitiveView {
     func buildNode(_ node: Node) {
         entry.layerNode = node
         installInheritedEnvironment(on: node, from: entry.environmentSource)
-        node.addNode(at: 0, Node(view: entry.makePanel().view))
+        let panel = node.observing { entry.makePanel().view }
+        node.addNode(at: 0, Node(view: panel))
         let control = FloatingPopupElement(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
         entry.panelElement = control.panelElement
@@ -444,7 +445,8 @@ private struct FloatingPopupLayer: View, PrimitiveView {
         entry.layerNode = node
         node.view = self
         installInheritedEnvironment(on: node, from: entry.environmentSource)
-        node.children[0].update(using: entry.makePanel().view)
+        let panel = node.observing { entry.makePanel().view }
+        node.children[0].update(using: panel)
         let control = node.element as! FloatingPopupElement
         control.entry = entry
         control.presenter = presenter
@@ -539,7 +541,8 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
     func buildNode(_ node: Node) {
         entry.layerNode = node
         installInheritedEnvironment(on: node, from: entry.environmentSource)
-        node.addNode(at: 0, Node(view: entry.makePanel().view))
+        let panel = node.observing { entry.makePanel().view }
+        node.addNode(at: 0, Node(view: panel))
         let control = PopoverFloatingElement(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
         entry.panelElement = control.panelElement
@@ -552,7 +555,8 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
         entry.layerNode = node
         node.view = self
         installInheritedEnvironment(on: node, from: entry.environmentSource)
-        node.children[0].update(using: entry.makePanel().view)
+        let panel = node.observing { entry.makePanel().view }
+        node.children[0].update(using: panel)
         let control = node.element as! PopoverFloatingElement
         control.entry = entry
         control.presenter = presenter
@@ -690,7 +694,8 @@ private struct ModalFloatingLayer: View, PrimitiveView {
     func buildNode(_ node: Node) {
         entry.layerNode = node
         installInheritedEnvironment(on: node, from: entry.environmentSource)
-        node.addNode(at: 0, Node(view: entry.makePanel().view))
+        let panel = node.observing { entry.makePanel().view }
+        node.addNode(at: 0, Node(view: panel))
         let control = ModalFloatingElement(entry: entry, presenter: presenter)
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
         entry.panelElement = control.panelElement
@@ -703,7 +708,8 @@ private struct ModalFloatingLayer: View, PrimitiveView {
         entry.layerNode = node
         node.view = self
         installInheritedEnvironment(on: node, from: entry.environmentSource)
-        node.children[0].update(using: entry.makePanel().view)
+        let panel = node.observing { entry.makePanel().view }
+        node.children[0].update(using: panel)
         let control = node.element as! ModalFloatingElement
         control.entry = entry
         control.presenter = presenter

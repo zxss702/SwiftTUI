@@ -58,11 +58,12 @@ import Foundation
     }
 
     func insertElement(at index: Int, node: Node) {
-        (node.element as! LazyVGridElement).handleInsert(at: index)
+        // no-op — see LazyVStack.insertElement (Optional/if teardown must not
+        // mutate flat lazy indices; `reloadContent` is the sync point).
     }
 
     func removeElement(at index: Int, node: Node) {
-        (node.element as! LazyVGridElement).handleRemove(at: index)
+        // See insertElement.
     }
 
     // MARK: - Element
@@ -135,6 +136,7 @@ import Foundation
 
         @discardableResult
         func reloadContent(totalChildrenSize: Int) -> Bool {
+            let sizeChanged = self.totalChildrenSize != totalChildrenSize
             self.totalChildrenSize = totalChildrenSize
             var remounted = false
             var toRemove: [Int] = []
@@ -169,8 +171,8 @@ import Foundation
             lastEndIndex = nil
             lastForcedChrome = []
             rebuildSectionPlan()
-            updateVisibleRegion(offset: lastOffset, height: lastHeight)
-            return remounted
+            let visibleChanged = updateVisibleRegion(offset: lastOffset, height: lastHeight)
+            return remounted || sizeChanged || visibleChanged
         }
 
         func handleInsert(at index: Int) {

@@ -68,6 +68,23 @@ public extension View {
         let kind = (style as? any _TextEditorStyleResolvable)?.textEditorStyleKind ?? .automatic
         return environment(\.textEditorStyleKind, kind)
     }
+
+    /// Non-editable prompt drawn only on the first visual line (e.g. `folder>`).
+    /// Continuation lines start at column 0 — avoids HStack indent looking like a leading space.
+    func textEditorPrompt(_ prompt: String) -> some View {
+        environment(\.textEditorPrompt, prompt)
+    }
+}
+
+private struct TextEditorPromptEnvironmentKey: EnvironmentKey {
+    static var defaultValue: String { "" }
+}
+
+extension EnvironmentValues {
+    var textEditorPrompt: String {
+        get { self[TextEditorPromptEnvironmentKey.self] }
+        set { self[TextEditorPromptEnvironmentKey.self] = newValue }
+    }
 }
 
 // MARK: - TextEditor
@@ -78,13 +95,14 @@ public struct TextEditor: View {
     @Binding var text: String
     @Environment(\.textEditorStyleKind) private var styleKind
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.textEditorPrompt) private var prompt
 
     public init(text: Binding<String>) {
         self._text = text
     }
 
     public var body: some View {
-        let core = TextEditorCore(text: $text, isEnabled: isEnabled)
+        let core = TextEditorCore(text: $text, isEnabled: isEnabled, prompt: prompt)
         switch styleKind {
         case .roundedBorder:
             // macOS roundedBorder：圆角边框
@@ -104,12 +122,16 @@ public typealias TextEdit = TextEditor
 private struct TextEditorCore: View, PrimitiveView {
     @Binding var text: String
     var isEnabled: Bool
+    var prompt: String
 
     static var size: Int? { 1 }
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        node.element = TextEditorElement(text: $text, isEnabled: isEnabled)
+        // Observe Binding reads on this node only (not an ancestor).
+        node.element = node.observing {
+            TextEditorElement(text: $text, isEnabled: isEnabled, prompt: prompt)
+        }
     }
 
     func updateNode(_ node: Node) {
@@ -118,10 +140,18 @@ private struct TextEditorCore: View, PrimitiveView {
         let control = node.element as! TextEditorElement
         control.text = $text
         control.isEnabledFlag = isEnabled
-        // External Binding changes only: local edits already rebuilt + invalidated.
-        if control.syncFromBinding() {
+        if control.prompt != prompt {
+            control.prompt = prompt
+            control.invalidateWrapCache()
             control.ensureVisualLines()
             control.layer.invalidate()
+        }
+        // External Binding changes only: local edits already rebuilt + invalidated.
+        node.observing {
+            if control.syncFromBinding() {
+                control.ensureVisualLines()
+                control.layer.invalidate()
+            }
         }
     }
 }
@@ -130,6 +160,7 @@ private struct TextEditorCore: View, PrimitiveView {
 private final class TextEditorElement: Element {
     var text: Binding<String>
     var isEnabledFlag: Bool
+    var prompt: String
 
     private var cachedText: String
     private var cursorIndex: String.Index
@@ -138,15 +169,30 @@ private final class TextEditorElement: Element {
     private var lineRanges: [Range<String.Index>] = []
     private var needsRebuild = true
     private var lastBuiltWidth: Int = -1
-    /// 按硬换行分段缓存 wrap 结果；只重排被改动的段落，避免每键全量 O(n) wrap。
-    private var paragraphWrapCache: [ParagraphWrapCache] = []
+    private var lastBuiltPromptWidth: Int = -1
+    /// Staged Binding write — flushed at frame start so key handling stays off
+    /// the Observation / view-graph path (see `Application.flushPendingEditorCommits`).
+    private var bindingDirty = false
+    /// 按硬换行分段缓存 wrap 结果；Dictionary 查找，避免每键线性扫 + 字符串相等。
+    private var paragraphWrapCache: [WrapCacheKey: ParagraphWrapCache] = [:]
+
+    private struct WrapCacheKey: Hashable {
+        let text: String
+        let width: Int
+        let firstLineWidth: Int
+    }
 
     private struct ParagraphWrapCache {
-        var text: String
-        var width: Int
         var visualLines: [String]
-        /// 相对段落起点的 UTF-16 偏移区间（不含跨段）。
+        /// Character offsets relative to the segment start.
         var relativeRanges: [(lower: Int, upper: Int)]
+    }
+
+    private var promptWidth: Int { prompt.width }
+
+    func invalidateWrapCache() {
+        needsRebuild = true
+        paragraphWrapCache.removeAll(keepingCapacity: true)
     }
     // MARK: - Selection / undo state
 
@@ -271,16 +317,37 @@ private final class TextEditorElement: Element {
         layer.invalidate()
     }
 
-    init(text: Binding<String>, isEnabled: Bool) {
+    init(text: Binding<String>, isEnabled: Bool, prompt: String = "") {
         self.text = text
         self.isEnabledFlag = isEnabled
+        self.prompt = prompt
         self.cachedText = text.wrappedValue
         self.cursorIndex = cachedText.endIndex
     }
 
-    /// Write Binding immediately so Observation / `onChange` always see content changes.
+    /// Stage Binding for the next frame commit (same frame as paint). Immediate
+    /// writes were forcing an Observation pass on every key before the glyph
+    /// was drawn — input felt lagged in large host views.
     private func commitBindingNow() {
-        text.wrappedValue = cachedText
+        guard text.wrappedValue != cachedText else {
+            bindingDirty = false
+            return
+        }
+        if let app = layer.rootRenderer?.application {
+            bindingDirty = true
+            app.noteEditorNeedsCommit(self)
+        } else {
+            bindingDirty = false
+            text.wrappedValue = cachedText
+        }
+    }
+
+    override func commitBindingIfNeeded() {
+        guard bindingDirty else { return }
+        bindingDirty = false
+        if text.wrappedValue != cachedText {
+            text.wrappedValue = cachedText
+        }
     }
 
     /// Returns true when cached text was replaced from an external Binding write.
@@ -325,7 +392,8 @@ private final class TextEditorElement: Element {
 
     func ensureVisualLines(width: Int? = nil) {
         let width = width ?? max(layer.frame.size.width.intValue, 1)
-        if needsRebuild || width != lastBuiltWidth {
+        let pw = promptWidth
+        if needsRebuild || width != lastBuiltWidth || pw != lastBuiltPromptWidth {
             buildVisualLines(width: width)
         }
     }
@@ -335,33 +403,62 @@ private final class TextEditorElement: Element {
         lineRanges.removeAll(keepingCapacity: true)
 
         let width = max(width, 1)
-        var nextCache: [ParagraphWrapCache] = []
-        nextCache.reserveCapacity(paragraphWrapCache.count + 1)
+        let pw = promptWidth
+        // Split on hard newlines *without* feeding `\n` into TextLayout.wrap.
+        // `omittingEmptySubsequences: false` keeps real empty lines and a caret
+        // row after a trailing `\n`.
+        let segments = cachedText.split(separator: "\n", omittingEmptySubsequences: false)
+        var nextCache: [WrapCacheKey: ParagraphWrapCache] = [:]
+        nextCache.reserveCapacity(max(segments.count, paragraphWrapCache.count))
 
-        var paraStart = cachedText.startIndex
-        while true {
-            let paraEnd = endOfParagraph(from: paraStart)
-            let paraText = String(cachedText[paraStart ..< paraEnd])
-            let baseOffset = cachedText.distance(from: cachedText.startIndex, to: paraStart)
-
+        // Single forward walk for String.Index — never `offsetBy` from startIndex
+        // per line (that was O(n²) on every keystroke).
+        var segmentStart = cachedText.startIndex
+        for (segmentIndex, segment) in segments.enumerated() {
+            let segmentText = String(segment)
+            let firstLineWidth = (segmentIndex == 0 && pw > 0) ? max(1, width - pw) : width
+            let key = WrapCacheKey(text: segmentText, width: width, firstLineWidth: firstLineWidth)
             let wrapped: ParagraphWrapCache
-            if let hit = paragraphWrapCache.first(where: { $0.text == paraText && $0.width == width }) {
+            if let hit = paragraphWrapCache[key] {
+                wrapped = hit
+                nextCache[key] = hit
+            } else if let hit = nextCache[key] {
                 wrapped = hit
             } else {
-                wrapped = wrapParagraph(paraText, width: width)
+                wrapped = wrapSegment(segmentText, width: width, firstLineWidth: firstLineWidth)
+                nextCache[key] = wrapped
             }
-            nextCache.append(wrapped)
 
+            let hasTrailingNewline = segmentIndex < segments.count - 1
+            var cursor = segmentStart
+            var cursorOffset = 0
             for (i, line) in wrapped.visualLines.enumerated() {
+                var rel = wrapped.relativeRanges[i]
+                // Fold the following hard `\n` into the last soft line's range
+                // (already accounted for in `cursor` — do not advance again below).
+                if hasTrailingNewline, i == wrapped.visualLines.count - 1 {
+                    rel = (rel.lower, rel.upper + 1)
+                }
+                while cursorOffset < rel.lower, cursor < cachedText.endIndex {
+                    cursor = cachedText.index(after: cursor)
+                    cursorOffset += 1
+                }
+                let lower = cursor
+                while cursorOffset < rel.upper, cursor < cachedText.endIndex {
+                    cursor = cachedText.index(after: cursor)
+                    cursorOffset += 1
+                }
                 visualLines.append(line)
-                let rel = wrapped.relativeRanges[i]
-                let lower = cachedText.index(cachedText.startIndex, offsetBy: baseOffset + rel.lower)
-                let upper = cachedText.index(cachedText.startIndex, offsetBy: baseOffset + rel.upper)
-                lineRanges.append(lower ..< upper)
+                lineRanges.append(lower ..< cursor)
             }
 
-            if paraEnd == cachedText.endIndex { break }
-            paraStart = paraEnd
+            // Cover any segment chars not included in relative ranges (should be rare).
+            let segmentEndOffset = segmentText.count
+            while cursorOffset < segmentEndOffset, cursor < cachedText.endIndex {
+                cursor = cachedText.index(after: cursor)
+                cursorOffset += 1
+            }
+            segmentStart = cursor
         }
 
         if visualLines.isEmpty {
@@ -372,6 +469,7 @@ private final class TextEditorElement: Element {
         paragraphWrapCache = nextCache
         needsRebuild = false
         lastBuiltWidth = width
+        lastBuiltPromptWidth = pw
         clampContentOffset()
     }
 
@@ -388,63 +486,66 @@ private final class TextEditorElement: Element {
         }
     }
 
-    private func endOfParagraph(from start: String.Index) -> String.Index {
-        var end = start
-        while end < cachedText.endIndex {
-            if cachedText[end] == "\n" {
-                return cachedText.index(after: end)
-            }
-            end = cachedText.index(after: end)
-        }
-        return end
-    }
-
-    private func wrapParagraph(_ paraText: String, width: Int) -> ParagraphWrapCache {
-        let units: [TextLayout.LaidOutLine.Unit] = paraText.enumerated().map {
+    /// Soft-wrap one hard-newline segment (never contains `\n`).
+    /// `firstLineWidth` may be narrower (prompt columns reserved on line 0).
+    private func wrapSegment(
+        _ segmentText: String,
+        width: Int,
+        firstLineWidth: Int
+    ) -> ParagraphWrapCache {
+        let units: [TextLayout.LaidOutLine.Unit] = segmentText.enumerated().map {
             TextLayout.LaidOutLine.Unit(char: $0.element, sourceIndex: $0.offset)
         }
-        let lines = TextLayout.wrap(units, width: width)
+        let lines: [TextLayout.LaidOutLine]
+        if firstLineWidth < width, !units.isEmpty {
+            let head = TextLayout.wrap(units, width: firstLineWidth)
+            if let line0 = head.first,
+               let lastIdx = line0.units.last(where: { $0.sourceIndex != nil })?.sourceIndex
+            {
+                let next = lastIdx + 1
+                if next >= units.count {
+                    lines = [line0]
+                } else {
+                    lines = [line0] + TextLayout.wrap(Array(units[next...]), width: width)
+                }
+            } else {
+                lines = TextLayout.wrap(units, width: width)
+            }
+        } else {
+            lines = TextLayout.wrap(units, width: width)
+        }
         var visual: [String] = []
         var ranges: [(Int, Int)] = []
-        var searchStart = 0
-        let paraCount = paraText.count
+        visual.reserveCapacity(lines.count)
+        ranges.reserveCapacity(lines.count)
 
         for line in lines {
             visual.append(line.string)
             if line.units.isEmpty {
-                if searchStart < paraCount {
-                    let idx = paraText.index(paraText.startIndex, offsetBy: searchStart)
-                    if paraText[idx] == "\n" {
-                        ranges.append((searchStart, searchStart + 1))
-                        searchStart += 1
-                        continue
-                    }
-                }
-                ranges.append((searchStart, searchStart))
+                ranges.append((0, 0))
                 continue
             }
-            let first = line.units.compactMap(\.sourceIndex).min()!
-            let last = line.units.compactMap(\.sourceIndex).max()!
-            var upper = last + 1
-            if upper < paraCount {
-                let idx = paraText.index(paraText.startIndex, offsetBy: upper)
-                if paraText[idx] == "\n" { upper += 1 }
+            // Units are in source order — avoid repeated compactMap/min/max.
+            guard let first = line.units.first?.sourceIndex,
+                  let last = line.units.last?.sourceIndex
+            else {
+                ranges.append((0, 0))
+                continue
             }
-            ranges.append((first, upper))
-            searchStart = upper
+            ranges.append((first, last + 1))
         }
 
         if visual.isEmpty {
             visual = [""]
-            ranges = [(0, paraText.count)]
+            ranges = [(0, 0)]
         }
 
-        return ParagraphWrapCache(
-            text: paraText,
-            width: width,
-            visualLines: visual,
-            relativeRanges: ranges
-        )
+        return ParagraphWrapCache(visualLines: visual, relativeRanges: ranges)
+    }
+
+    /// Column offset for a document visual line (prompt on line 0 only).
+    private func contentColumnOffset(forVisualLine line: Int) -> Int {
+        (line == 0 && promptWidth > 0) ? promptWidth : 0
     }
 
     private func getVisualPosition(for index: String.Index) -> (line: Int, col: Int) {
@@ -505,6 +606,19 @@ private final class TextEditorElement: Element {
             let lineStr = visualLines[i]
             let y = i - startLine
             var x = 0
+            // Prompt only on document line 0 (and only while that line is visible).
+            if i == 0, !prompt.isEmpty {
+                for ch in prompt {
+                    let cw = max(ch.width, 1)
+                    if x + cw > width { break }
+                    var cell = Cell(char: ch)
+                    if !isEnabledFlag { cell.attributes.faint = true }
+                    buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
+                    x += cw
+                }
+            } else {
+                x = contentColumnOffset(forVisualLine: i)
+            }
             var index = lineRanges[i].lowerBound
             for char in lineStr {
                 let selected = selection?.contains(index) ?? false
@@ -512,6 +626,7 @@ private final class TextEditorElement: Element {
                 if cw <= 0 {
                     // Tab / other ASCII controls report width 0; `1..<0` traps.
                     if char == "\t" {
+                        if x + 1 > width { break }
                         var cell = Cell(char: " ")
                         if selected {
                             cell.backgroundColor = TextSelectionStyle.background
@@ -522,23 +637,17 @@ private final class TextEditorElement: Element {
                     index = cachedText.index(after: index)
                     continue
                 }
+                // Clip to frame — never paint CJK/emoji into neighboring controls
+                // (GeometryReader width-1 probes, narrow TextEdit).
+                if x + cw > width { break }
                 var cell = Cell(char: char)
                 if !isEnabledFlag { cell.attributes.faint = true }
                 if selected {
                     cell.backgroundColor = TextSelectionStyle.background
                     cell.foregroundColor = TextSelectionStyle.foreground
                 }
+                // ScreenBuffer.setCell expands width-2 into lead + continuation.
                 buffer.setCell(cell, at: Position(column: Extended(x), line: Extended(y)))
-                if cw > 1 {
-                    for w in 1..<cw {
-                        var cont = Cell(char: "\u{0000}")
-                        if selected {
-                            cont.backgroundColor = TextSelectionStyle.background
-                            cont.foregroundColor = TextSelectionStyle.foreground
-                        }
-                        buffer.setCell(cont, at: Position(column: Extended(x + w), line: Extended(y)))
-                    }
-                }
                 x += cw
                 index = cachedText.index(after: index)
             }
@@ -620,7 +729,8 @@ private final class TextEditorElement: Element {
         let pos = getVisualPosition(for: cursorIndex)
         let visualY = pos.line - contentOffset.intValue
         if visualY >= 0 && visualY < layer.frame.size.height.intValue {
-            return Position(column: Extended(pos.col), line: Extended(visualY))
+            let col = pos.col + contentColumnOffset(forVisualLine: pos.line)
+            return Position(column: Extended(col), line: Extended(visualY))
         }
         return nil
     }
@@ -838,7 +948,8 @@ private final class TextEditorElement: Element {
             max(0, local.line.intValue + contentOffset.intValue),
             max(0, visualLines.count - 1)
         )
-        cursorIndex = getIndex(forVisualPosition: visualY, col: max(0, local.column.intValue))
+        let col = max(0, local.column.intValue - contentColumnOffset(forVisualLine: visualY))
+        cursorIndex = getIndex(forVisualPosition: visualY, col: col)
         scrollToKeepCursorVisible()
     }
 
@@ -854,6 +965,7 @@ private final class TextEditorElement: Element {
     }
 
     override func willRemoveFromParent() {
+        commitBindingIfNeeded()
         window?.selectionCoordinator.end(self)
         super.willRemoveFromParent()
     }

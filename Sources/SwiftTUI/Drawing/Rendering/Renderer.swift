@@ -24,14 +24,30 @@ import Foundation
         }
         
         if let vtRenderer = vtRenderer {
-            // Clear the dirty rect in the VT back buffer before drawing the layer tree
+            // Clear the dirty rect, expanding each cell to its full wide-char
+            // span so we never leave an orphan lead / `\u{0000}` continuation.
+            let maxCol = layer.frame.size.width.intValue
+            let maxRow = layer.frame.size.height.intValue
+            let empty = VTCell(character: " ", style: VTStyle(foreground: nil, background: nil, attributes: []))
             for line in rect.minLine.intValue ... rect.maxLine.intValue {
+                var columns = Set<Int>()
                 for column in rect.minColumn.intValue ... rect.maxColumn.intValue {
-                    let vtPos = VTPosition(row: Int(line) + 1, column: Int(column) + 1)
+                    guard column >= 0, column < maxCol, line >= 0, line < maxRow else { continue }
+                    columns.insert(column)
+                    let vtPos = VTPosition(row: line + 1, column: column + 1)
+                    let ch = vtRenderer.back[vtPos].character
+                    if ch == "\u{0000}", column > 0 {
+                        columns.insert(column - 1)
+                    } else if ch.width > 1, column + 1 < maxCol {
+                        columns.insert(column + 1)
+                    }
+                }
+                for column in columns {
+                    let vtPos = VTPosition(row: line + 1, column: column + 1)
                     if vtPos.column >= 1, vtPos.row >= 1,
-                       vtPos.column <= layer.frame.size.width.intValue,
-                       vtPos.row <= layer.frame.size.height.intValue {
-                        vtRenderer.back[vtPos] = VTCell(character: " ", style: VTStyle(foreground: nil, background: nil, attributes: []))
+                       vtPos.column <= maxCol, vtPos.row <= maxRow
+                    {
+                        vtRenderer.back[vtPos] = empty
                     }
                 }
             }

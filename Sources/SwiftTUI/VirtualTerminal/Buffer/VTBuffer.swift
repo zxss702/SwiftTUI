@@ -142,6 +142,8 @@ extension VTBuffer {
       default:
         guard cursor < buffer.count else { return }
         let width = character.width
+        // Zero-width / combining controls must not stomp the same cell forever.
+        guard width > 0 else { continue }
 
         // Check if wide character fits in current row
         if (cursor % size.widthInt) + width > size.widthInt {

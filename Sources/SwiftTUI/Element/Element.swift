@@ -108,8 +108,31 @@ import Foundation
 
     /// Align `children[offset..<]` with `contentNode.element(at:)` after a content update
     /// (covers same-index identity swaps that insert/remove callbacks miss).
+    ///
+    /// `if hover { Menu }` / Optional / `_ConditionalView` rebuilds change child
+    /// identity here. Clearing hover in `removeSubview` would fire a spurious
+    /// `onHover(false)`, unmount the Menu again, and empty an open popup.
+    /// Suppress resign for the swap; Application re-hit-tests at frame end.
     func reconcileChildren(from contentNode: Node, offset: Int = 0) {
         let count = contentNode.size
+        var willMutate = children.count > offset + count
+        if !willMutate {
+            for i in 0 ..< count {
+                let expected = contentNode.element(at: i)
+                let index = offset + i
+                if index >= children.count || children[index] !== expected {
+                    willMutate = true
+                    break
+                }
+            }
+        }
+        let window = root.window
+        let previousSuppress = window?.suppressHoverResign ?? false
+        if willMutate {
+            window?.suppressHoverResign = true
+        }
+        defer { window?.suppressHoverResign = previousSuppress }
+
         while children.count > offset + count {
             removeSubview(at: children.count - 1)
         }

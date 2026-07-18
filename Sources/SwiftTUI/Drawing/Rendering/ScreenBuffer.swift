@@ -45,12 +45,56 @@ struct ScreenBuffer {
         clipRect = clipRect.intersection(with: translatedRect) ?? .zero
     }
     
+    /// Write a cell with wide-character (CJK / emoji) awareness:
+    /// - `\u{0000}` → raw continuation store (legacy callers)
+    /// - width 0 → ignored
+    /// - landing on a continuation → retreat to the lead column
+    /// - width 2 → lead + continuation
+    /// - width 1 → clear orphan continuation to the right
     mutating func setCell(_ cell: Cell, at position: Position) {
+        if cell.char == "\u{0000}" {
+            writeRaw(cell, at: position)
+            return
+        }
+        let cw = cell.char.width
+        guard cw > 0 else { return }
+
+        var writePos = position
+        if character(at: writePos) == "\u{0000}", writePos.column.intValue > 0 {
+            writePos = Position(column: writePos.column - 1, line: writePos.line)
+        }
+
+        writeRaw(cell, at: writePos)
+        if cw > 1 {
+            var cont = cell
+            cont.char = "\u{0000}"
+            for w in 1 ..< cw {
+                writeRaw(
+                    cont,
+                    at: Position(column: writePos.column + Extended(w), line: writePos.line)
+                )
+            }
+        } else {
+            let next = Position(column: writePos.column + 1, line: writePos.line)
+            if character(at: next) == "\u{0000}" {
+                var space = Cell(char: " ")
+                space.foregroundColor = cell.foregroundColor
+                space.backgroundColor = cell.backgroundColor
+                space.attributes = cell.attributes
+                writeRaw(space, at: next)
+            }
+        }
+    }
+
+    /// Single-column store without grapheme expansion (internal / continuation).
+    private mutating func writeRaw(_ cell: Cell, at position: Position) {
         let finalPos = position + translation
         guard clipRect.contains(finalPos) else { return }
         
         let localPos = finalPos - rect.position
-        guard localPos.x >= 0, localPos.y >= 0, localPos.x < rect.size.width.intValue, localPos.y < rect.size.height.intValue else { return }
+        guard localPos.x >= 0, localPos.y >= 0,
+              localPos.x < rect.size.width.intValue, localPos.y < rect.size.height.intValue
+        else { return }
         
         if let vt = vtRenderer {
             let vtPos = VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)

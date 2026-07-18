@@ -122,7 +122,9 @@ private struct ScrollViewReaderHost<Content: View>: View, PrimitiveView {
     func buildNode(_ node: Node) {
         let proxy = ScrollViewProxy()
         node.storage["proxy"] = proxy
-        node.addNode(at: 0, Node(view: content(proxy).view))
+        // Content closure often reads `@Query` / `@Observable` — track on this node.
+        let childView = node.observing { content(proxy).view }
+        node.addNode(at: 0, Node(view: childView))
         let control = ScrollViewReaderElement()
         control.proxy = proxy
         proxy.bridge = control
@@ -138,7 +140,8 @@ private struct ScrollViewReaderHost<Content: View>: View, PrimitiveView {
         node.view = self
         let proxy = (node.storage["proxy"] as? ScrollViewProxy) ?? ScrollViewProxy()
         node.storage["proxy"] = proxy
-        node.children[0].update(using: content(proxy).view)
+        let childView = node.observing { content(proxy).view }
+        node.children[0].update(using: childView)
         let control = node.element as! ScrollViewReaderElement
         control.proxy = proxy
         proxy.bridge = control

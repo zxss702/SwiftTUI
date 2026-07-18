@@ -267,44 +267,41 @@ public struct Query<Element: PersistentModel>: AnyState {
     ) {
         guard let ctx = node.root.application?.swiftDataContext else { return }
 
-        let membershipMayChange = !hasUserInfo || !inserted.isEmpty || !deleted.isEmpty
-        if membershipMayChange {
-            let newMembership = (try? ctx.fetchIdentifiers(descriptor)) ?? []
-            let previous = node.storage[membershipKey] as? [PersistentIdentifier]
-            if previous != newMembership {
-                let items = (try? ctx.fetch(descriptor)) ?? []
-                node.state[slot] = items
-                node.storage[membershipKey] = newMembership
-                node.root.application?.invalidateNode(node)
-                return
-            }
+        // Always reconcile membership (same as JsonData). Relying only on
+        // `insertedIdentifiers` misses empty→first-row when userInfo is incomplete
+        // or the insert is reported as an update on a related model — UI then
+        // stays empty until a page remount / resize.
+        let newMembership = (try? ctx.fetchIdentifiers(descriptor)) ?? []
+        let previous = node.storage[membershipKey] as? [PersistentIdentifier]
+        if previous != newMembership {
+            let items = (try? ctx.fetch(descriptor)) ?? []
+            node.state[slot] = items
+            node.storage[membershipKey] = newMembership
+            // Row count change → LazyVStack / ScrollView need layout, not just paint.
+            node.root.application?.invalidateNode(node, layout: true)
+            return
         }
 
         // Membership unchanged: merge store values into this context, keep the same
         // identifier sequence in cache, then invalidate so row `.equatable()` views
         // refresh. Cross-context SwiftData saves do not reliably fire Observation
         // on already-registered models without a fetch + view pass.
-        guard !updated.isEmpty || !hasUserInfo else { return }
-        let cached = (node.state[slot] as? [Element]) ?? []
-        let cachedIDs = Set(cached.map(\.persistentModelID))
-        let relevant = hasUserInfo ? updated.intersection(cachedIDs) : cachedIDs
-        guard !relevant.isEmpty else { return }
-
-        let items = (try? ctx.fetch(descriptor)) ?? cached
-        let newMembership = items.map(\.persistentModelID)
-        if let previous = node.storage[membershipKey] as? [PersistentIdentifier],
-           previous != newMembership
-        {
-            node.state[slot] = items
-            node.storage[membershipKey] = newMembership
-            node.root.application?.invalidateNode(node)
+        guard !updated.isEmpty || !hasUserInfo || !inserted.isEmpty || !deleted.isEmpty else {
             return
         }
+        let cached = (node.state[slot] as? [Element]) ?? []
+        let cachedIDs = Set(cached.map(\.persistentModelID))
+        // Empty cache with a no-op membership compare already returned above.
+        // For in-place updates, only refresh when the save touches our rows
+        // (or userInfo is missing and we must assume relevance).
+        if hasUserInfo {
+            let relevant = updated.union(inserted).union(deleted).intersection(cachedIDs)
+            guard !relevant.isEmpty else { return }
+        }
 
-        // Same membership: replace element refs so ForEach can push updates;
-        // MarkdownView.equatable() skips unchanged content.
+        let items = (try? ctx.fetch(descriptor)) ?? cached
         node.state[slot] = items
-        node.storage[membershipKey] = newMembership
+        node.storage[membershipKey] = items.map(\.persistentModelID)
         node.root.application?.invalidateNode(node)
     }
     #else

@@ -23,9 +23,22 @@ extension Optional: View, PrimitiveView, GenericView, OptionalView where Wrapped
         case (.none, .some(let newValue)):
             node.addNode(at: 0, Node(view: newValue.view))
         case (.some, .none):
-            node.removeNode(at: 0)
+            // Prefer ConditionalView via ViewBuilder.buildOptional; this path
+            // remains for legacy Optional nodes. Suppress hover resign like
+            // `_ConditionalView` branch swaps.
+            let window = node.root.application?.window
+            let previousSuppress = window?.suppressHoverResign ?? false
+            window?.suppressHoverResign = true
+            defer { window?.suppressHoverResign = previousSuppress }
+            if !node.children.isEmpty {
+                node.removeNode(at: 0)
+            }
         case (.some, .some(let newValue)):
-            node.children[0].update(using: newValue.view)
+            if !node.children.isEmpty {
+                node.children[0].update(using: newValue.view)
+            } else {
+                node.addNode(at: 0, Node(view: newValue.view))
+            }
         }
     }
 }

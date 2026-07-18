@@ -91,7 +91,9 @@ where Data: RandomAccessCollection, ID: Hashable, Content: View {
             {
                 continue
             }
-            child.update(using: content(element).view)
+            // Content closure may read `@Observable` / `@Model` fields — track on
+            // the ForEach node (not nested into an ancestor access list).
+            child.update(using: node.observing { content(element).view })
         }
     }
 
@@ -177,7 +179,7 @@ where Data: RandomAccessCollection, ID: Hashable, Content: View {
             return existing
         }
         let item = data[data.index(data.startIndex, offsetBy: index)]
-        let child = Node(view: content(item).view)
+        let child = Node(view: node.observing { content(item).view })
         node.attachContiguousChild(child, at: index)
         if node.suppressUpdates {
             child.setSubtreeUpdateSuppressed(true)

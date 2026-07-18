@@ -47,17 +47,19 @@ private struct SecureFieldCore: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        let control = TextFieldElement(
-            text: text,
-            placeholder: title,
-            placeholderColor: placeholderColor,
-            alignment: alignment,
-            isEnabled: isEnabled,
-            submitAction: submitAction,
-            legacyAction: nil
-        )
-        control.secure = true
-        node.element = control
+        node.element = node.observing {
+            let control = TextFieldElement(
+                text: text,
+                placeholder: title,
+                placeholderColor: placeholderColor,
+                alignment: alignment,
+                isEnabled: isEnabled,
+                submitAction: submitAction,
+                legacyAction: nil
+            )
+            control.secure = true
+            return control
+        }
     }
 
     func updateNode(_ node: Node) {
@@ -71,7 +73,9 @@ private struct SecureFieldCore: View, PrimitiveView {
         control.isEnabledFlag = isEnabled
         control.submitAction = submitAction
         control.secure = true
-        control.syncFromBinding()
-        control.layer.invalidate()
+        node.observing {
+            control.syncFromBinding()
+            control.layer.invalidate()
+        }
     }
 }

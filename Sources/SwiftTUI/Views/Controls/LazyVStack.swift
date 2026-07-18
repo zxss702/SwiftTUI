@@ -53,11 +53,15 @@ import Foundation
     }
 
     func insertElement(at index: Int, node: Node) {
-        (node.element as! LazyVStackElement).handleInsert(at: index)
+        // no-op — same as HStack/VStack. `if` / Optional / `_ConditionalView`
+        // teardown bubbles `removeElement` through the ForEach row into this
+        // layout root; applying it as a *flat* LazyVStack slot delete corrupts
+        // indices mid-update (crash in `Node.offset` after delete). ForEach
+        // structural changes are applied in `reloadContent` only.
     }
 
     func removeElement(at index: Int, node: Node) {
-        (node.element as! LazyVStackElement).handleRemove(at: index)
+        // See insertElement.
     }
 
     private class LazyVStackElement: Element, LazyElement, LazyIdentityOffsetProviding {
@@ -126,6 +130,10 @@ import Foundation
         /// - Returns: `true` when a loaded slot was dropped (caller should relayout).
         @discardableResult
         func reloadContent(totalChildrenSize: Int) -> Bool {
+            // Empty→first-row (and any count change) must request layout even when
+            // no previously loaded slot was swapped — otherwise ScrollView keeps a
+            // stale content size until the window is resized.
+            let sizeChanged = self.totalChildrenSize != totalChildrenSize
             self.totalChildrenSize = totalChildrenSize
             invalidatePrefixSums()
             var remounted = false
@@ -160,8 +168,8 @@ import Foundation
             }
             lastStartIndex = nil
             lastEndIndex = nil
-            updateVisibleRegion(offset: lastOffset, height: lastHeight)
-            return remounted
+            let visibleChanged = updateVisibleRegion(offset: lastOffset, height: lastHeight)
+            return remounted || sizeChanged || visibleChanged
         }
 
         func handleInsert(at index: Int) {

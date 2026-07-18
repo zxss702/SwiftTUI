@@ -49,8 +49,14 @@ private struct ToolbarModifierView<Content: View, Toolbar: ToolbarContent>: View
         // Keep-alive pages stay mounted; only the top page may publish chrome.
         guard bound == context.currentPageID else { return }
 
+        // Collect under `observing`: custom `ToolbarContent.body` often reads
+        // `@Observable` / `@Bindable` (e.g. `if let record = observer.record`).
+        // Without this, chrome stays empty until a GeometryReader resize rebuilds
+        // the page and re-registers the toolbar.
         var storage = NavigationToolbarContent.empty
-        collectToolbarContent(toolbar, into: &storage)
+        node.observing {
+            collectToolbarContent(toolbar, into: &storage)
+        }
         context.setToolbar(storage, for: bound)
     }
 }
@@ -83,6 +89,7 @@ private struct ToolbarTitleMenuModifierView<Content: View, MenuContent: View>: V
         }
         guard let bound = node.storage[boundPageKey] as? AnyHashable else { return }
         guard bound == context.currentPageID else { return }
-        context.setTitleMenu(AnyView(menu), for: bound)
+        let menuView = node.observing { AnyView(menu) }
+        context.setTitleMenu(menuView, for: bound)
     }
 }

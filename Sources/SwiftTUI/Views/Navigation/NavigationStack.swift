@@ -85,16 +85,24 @@ private struct NavigationBar: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         context.chromeBarNode = node
-        node.addNode(at: 0, Node(view: barContent().view))
+        let content = node.observing {
+            // Track stack/titles for back label & plain title; toolbar slots are
+            // ObservationIgnored and refreshed via chromeBarNode invalidate.
+            let _ = context.stack
+            let _ = context.titles
+            return barContent().view
+        }
+        node.addNode(at: 0, Node(view: content))
     }
 
     func updateNode(_ node: Node) {
         context.chromeBarNode = node
-        // Track stack/titles for back label & plain title; toolbar slots are
-        // ObservationIgnored and refreshed via chromeBarNode invalidate.
-        let _ = context.stack
-        let _ = context.titles
-        node.children[0].update(using: barContent().view)
+        let content = node.observing {
+            let _ = context.stack
+            let _ = context.titles
+            return barContent().view
+        }
+        node.children[0].update(using: content)
     }
 
     private func barContent() -> some View {

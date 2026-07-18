@@ -120,6 +120,108 @@ struct InteractionIsolationTests {
     /// Logorythia HistoryItemView shape: Menu lives inside a row Button and only
     /// appears while hovered. Opening/clicking the Menu must not fire the row,
     /// and the delete item must activate (regression target for nested Menu).
+    /// ModelInfoEditView crash: LazyVStack + ForEach rows with `if index != 0`
+    /// Divider; deleting a middle row changes later rows' index (Divider `if`
+    /// flips). Must not trap in `Node.offset` when if-teardown bubbles
+    /// `removeElement` into LazyVStack.
+    @Test func lazyForEachDeleteShiftingIndexIfDoesNotCrash() async throws {
+        struct Row: Identifiable, Equatable {
+            let id: String
+        }
+        struct Root: View {
+            @State var rows: [Row] = [Row(id: "a"), Row(id: "b"), Row(id: "c")]
+            var body: some View {
+                ScrollView {
+                    LazyVStack {
+                        ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                            if index != 0 {
+                                Divider()
+                            }
+                            HStack(spacing: 0) {
+                                Text(row.id)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Button("del-\(row.id)") {
+                                    rows.removeAll { $0.id == row.id }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare(size: Size(width: 40, height: 16))
+        #expect(findText(in: app.testing_rootElement, equalTo: "a") != nil)
+
+        // Delete the first row so former index-1 loses its leading Divider `if`.
+        let delA = try #require(findButtonLabeled("del-a", in: app.testing_rootElement))
+        try await clickAt(center(of: delA), on: app)
+        try await app.testing_drainUntilIdle()
+
+        #expect(findText(in: app.testing_rootElement, equalTo: "a") == nil)
+        #expect(findText(in: app.testing_rootElement, equalTo: "b") != nil)
+        #expect(findText(in: app.testing_rootElement, equalTo: "c") != nil)
+
+        // Delete a middle row while later rows still have Dividers.
+        let delB = try #require(findButtonLabeled("del-b", in: app.testing_rootElement))
+        try await clickAt(center(of: delB), on: app)
+        try await app.testing_drainUntilIdle()
+
+        #expect(findText(in: app.testing_rootElement, equalTo: "b") == nil)
+        #expect(findText(in: app.testing_rootElement, equalTo: "c") != nil)
+    }
+
+    /// Setting `ModelInfoRowView` shape: Menu is a *sibling* of the row label
+    /// inside `HStack`, shown via `if onHover { Menu }` (not `.hidden`).
+    @Test func menuBesideHoveredRowViaIfActivatesItem() async throws {
+        final class Box {
+            var copyTaps = 0
+            var deleteTaps = 0
+        }
+        let box = Box()
+        struct Root: View {
+            let box: Box
+            @State var onHover = false
+            var body: some View {
+                // Mirror ModelInfoRow: row content + conditional Menu, hover on stack.
+                HStack(spacing: 0) {
+                    Button("model-row") {}
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if onHover {
+                        Menu {
+                            Button("复制") { box.copyTaps += 1 }
+                            Button("删除") { box.deleteTaps += 1 }
+                        } label: {
+                            Text("more")
+                        }
+                        .menuIndicator(.hidden)
+                    }
+                }
+                .onHover { onHover = $0 }
+            }
+        }
+
+        let app = Application(rootView: Root(box: box))
+        try await app.testing_prepare(size: Size(width: 40, height: 12))
+
+        let row = try #require(findButtonLabeled("model-row", in: app.testing_rootElement))
+        try await app.testing_turn(input: .mouse(MouseEvent(position: center(of: row), type: .move)))
+        try await app.testing_drainUntilIdle()
+        #expect(findButtonLabeled("more", in: app.testing_rootElement) != nil, "hover must reveal Menu")
+
+        let more = try #require(findButtonLabeled("more", in: app.testing_rootElement))
+        try await clickAt(center(of: more), on: app)
+        #expect(app.window.popupPresenter?.isPresented == true, "Menu must stay open after if-branch mount")
+        #expect(findButtonLabeled("复制", in: app.testing_rootElement) != nil)
+        #expect(findButtonLabeled("删除", in: app.testing_rootElement) != nil)
+
+        let copy = try #require(findButtonLabeled("复制", in: app.testing_rootElement))
+        try await clickAt(center(of: copy), on: app)
+        #expect(box.copyTaps == 1, "复制 must fire (copyTaps=\(box.copyTaps))")
+        #expect(app.window.popupPresenter?.isPresented == false)
+    }
+
     @Test func menuInsideHoveredButtonRowActivatesItem() async throws {
         final class Box {
             var rowTaps = 0
@@ -188,6 +290,9 @@ struct InteractionIsolationTests {
                                 HStack {
                                     Text(row.title)
                                         .frame(maxWidth: .infinity, alignment: .leading)
+                                    // This case also covers Lazy + hover; trailing uses
+                                    // `.hidden` only for ZStack sizing. Branch `if` is
+                                    // covered by `menuBesideHoveredRowViaIfActivatesItem`.
                                     ZStack(alignment: .trailing) {
                                         Text("time-\(row.id)")
                                             .hidden(hovered.contains(row.id))
@@ -219,6 +324,7 @@ struct InteractionIsolationTests {
         let title = try #require(findButtonLabeled("row-2", in: app.testing_rootElement))
         let pos = center(of: title)
         try await app.testing_turn(input: .mouse(MouseEvent(position: pos, type: .move)))
+        try await app.testing_drainUntilIdle()
         let delete = try #require(findButtonLabeled("delete-2", in: app.testing_rootElement))
         #expect(delete.absoluteFrame.size.width > 0, "hover must reveal delete with real frame")
 

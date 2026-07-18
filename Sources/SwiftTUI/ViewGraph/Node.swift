@@ -112,11 +112,22 @@ final class Node {
             self.view = view
             return
         }
-        withObservationTracking {
-            view.updateNode(self)
-        } onChange: { [weak self] in
-            // PopupPresenter.stack 等 @Observable 在 MainActor 上变更时同步弄脏节点，
-            // 让 Application.update 的 drain 能在同一帧卸掉 sheet/popover，避免 dismiss 卡住。
+        // Observation is installed by the view itself (see `observing(_:)`) around
+        // only the reads that belong to this node — never around child `update`,
+        // because nested `withObservationTracking` merges child accesses into the
+        // parent (every keystroke would invalidate `AgentView` + dialogue).
+        view.updateNode(self)
+    }
+
+    /// Track `@Observable` reads for **this** node only. Must not wrap calls to
+    /// `child.update` / `child.build` — those install their own tracking.
+    ///
+    /// Use around `body` and ViewBuilder closures (`ScrollViewReader`,
+    /// `GeometryReader`, `ForEach` content, …). Nested `withObservationTracking`
+    /// merges into the outer access list, so never nest this around child updates.
+    @discardableResult
+    func observing<T>(_ apply: () -> T) -> T {
+        withObservationTracking(apply) { [weak self] in
             Self.scheduleInvalidate(self)
         }
     }
@@ -144,20 +155,24 @@ final class Node {
 
     /// The number of controls in the parent node _before_ the current node.
     private var offset: Int {
+        guard let parent else { return 0 }
+        // Clamp: during Optional/Conditional teardown + ForEach index shifts,
+        // `index` can briefly exceed `parent.children.count` if a sibling was
+        // already removed. Never trap on subscript.
+        let upper = min(index, parent.children.count)
         var offset = 0
-        for i in 0 ..< index {
-            offset += parent?.children[i].size ?? 0
+        for i in 0 ..< upper {
+            offset += parent.children[i].size
         }
         return offset
     }
 
     func build() {
         if !built {
-            withObservationTracking {
-                self.view.buildNode(self)
-            } onChange: { [weak self] in
-                Self.scheduleInvalidate(self)
-            }
+            // Views that read `@Observable` state during `buildNode` must wrap
+            // those reads in `observing` (see `ComposedView`); do not wrap the
+            // whole `buildNode` here or child builds nest into the same list.
+            self.view.buildNode(self)
             built = true
             if !(view is OptionalView), let container = view as? LayoutRootView {
                 container.loadData(node: self)
@@ -168,7 +183,7 @@ final class Node {
     /// Observation `onChange` is nonisolated. When already on the main thread
     /// (typical during host commit), invalidate synchronously into the open
     /// Transaction; otherwise hop with `Task`.
-    private nonisolated static func scheduleInvalidate(_ node: Node?) {
+    nonisolated static func scheduleInvalidate(_ node: Node?) {
         guard let node else { return }
         if Thread.isMainThread {
             MainActor.assumeIsolated {

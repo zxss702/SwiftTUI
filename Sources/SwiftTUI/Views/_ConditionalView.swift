@@ -31,11 +31,25 @@ import Foundation
         case (.b, .b(let newValue)):
             node.children[0].update(using: newValue.view)
         case (.b, .a(let newValue)):
-            node.removeNode(at: 0)
-            node.addNode(at: 0, Node(view: newValue.view))
+            // Branch identity swap (e.g. `if hover { Menu }`). Suppress hover
+            // resign so `onHover` is not spuriously cleared mid-swap.
+            withHoverResignSuppressed(on: node) {
+                node.removeNode(at: 0)
+                node.addNode(at: 0, Node(view: newValue.view))
+            }
         case (.a, .b(let newValue)):
-            node.removeNode(at: 0)
-            node.addNode(at: 0, Node(view: newValue.view))
+            withHoverResignSuppressed(on: node) {
+                node.removeNode(at: 0)
+                node.addNode(at: 0, Node(view: newValue.view))
+            }
         }
+    }
+
+    private func withHoverResignSuppressed(on node: Node, _ body: () -> Void) {
+        let window = node.root.application?.window
+        let previousSuppress = window?.suppressHoverResign ?? false
+        window?.suppressHoverResign = true
+        defer { window?.suppressHoverResign = previousSuppress }
+        body()
     }
 }

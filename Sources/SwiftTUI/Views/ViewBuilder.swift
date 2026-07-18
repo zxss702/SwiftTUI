@@ -6,7 +6,24 @@ import Foundation
 
     public static func buildBlock<Content: View>(_ content: Content) -> Content { content }
 
-    public static func buildIf<V: View>(_ content: V)  -> V  { content }
+    /// `if condition { view }` without `else` — keep a stable slot (`EmptyView` when
+    /// false) instead of `Optional` toggling parent child *count*. That Optional
+    /// path made `HStack { …; if hover { Menu } }` tear down the Menu (and an open
+    /// popup) via spurious `onHover(false)` during `reconcileChildren`.
+    public static func buildOptional<Content: View>(
+        _ content: Content?
+    ) -> _ConditionalView<Content, EmptyView> {
+        if let content {
+            return _ConditionalView(content: .a(content))
+        }
+        return _ConditionalView(content: .b(EmptyView()))
+    }
+
+    public static func buildIf<Content: View>(
+        _ content: Content?
+    ) -> _ConditionalView<Content, EmptyView> {
+        buildOptional(content)
+    }
 
     public static func buildEither<TrueContent: View, FalseContent: View>(first: TrueContent) -> _ConditionalView<TrueContent, FalseContent> {
         _ConditionalView(content: .a(first))

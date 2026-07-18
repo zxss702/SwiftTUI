@@ -136,17 +136,19 @@ private struct TextFieldCore: View, PrimitiveView {
 
     func buildNode(_ node: Node) {
         setupEnvironmentProperties(node: node)
-        let control = TextFieldElement(
-            text: text,
-            placeholder: placeholder,
-            placeholderColor: placeholderColor,
-            alignment: alignment,
-            isEnabled: isEnabled,
-            submitAction: submitAction,
-            legacyAction: legacyAction
-        )
-        control.secure = secure
-        node.element = control
+        node.element = node.observing {
+            let control = TextFieldElement(
+                text: text,
+                placeholder: placeholder,
+                placeholderColor: placeholderColor,
+                alignment: alignment,
+                isEnabled: isEnabled,
+                submitAction: submitAction,
+                legacyAction: legacyAction
+            )
+            control.secure = secure
+            return control
+        }
     }
 
     func updateNode(_ node: Node) {
@@ -161,8 +163,10 @@ private struct TextFieldCore: View, PrimitiveView {
         control.submitAction = submitAction
         control.legacyAction = legacyAction
         control.secure = secure
-        if control.syncFromBinding() {
-            control.layer.invalidate()
+        node.observing {
+            if control.syncFromBinding() {
+                control.layer.invalidate()
+            }
         }
     }
 }

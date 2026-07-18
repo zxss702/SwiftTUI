@@ -60,25 +60,16 @@ import Foundation
         control.strikethrough = strikethrough
         control.lineLimit = lineLimit
         control.truncationMode = truncationMode
-        // Only reflow when measured size would change; pure repaints skip full-tree layout.
+        // Measurement-affecting changes must always relayout. Probing with the
+        // *current* frame width is wrong: a longer string measured in a stale
+        // narrow frame can report the same width (clipped) and skip layout,
+        // leaving Picker/Menu labels stuck until the window is resized.
         if previousText != control.text
             || previousLineLimit != lineLimit
             || previousTruncation != truncationMode
         {
-            // Content affecting measurement changed: drop stale size / flexibility
-            // caches on self and ancestors so the next layout measures fresh.
             control.invalidateSizeCacheUpward()
-            let width = control.layer.frame.size.width
-            if width > 0 {
-                let measured = control.size(proposedSize: Size(width: width, height: .infinity))
-                if measured.height != control.layer.frame.size.height
-                    || measured.width != control.layer.frame.size.width
-                {
-                    node.root.application?.requestLayout()
-                }
-            } else {
-                node.root.application?.requestLayout()
-            }
+            node.root.application?.requestLayout()
         }
         control.layer.invalidate()
     }

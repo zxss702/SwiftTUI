@@ -13,11 +13,13 @@ import Foundation
 
     func buildNode(_ node: Node) {
         setupStateProperties(node: node)
-        node.addNode(at: 0, Node(view: VStack(content: content(geometry))))
+        let childView = node.observing { VStack(content: content(geometry)).view }
+        node.addNode(at: 0, Node(view: childView))
         let control = GeometryReaderElement(geometry: _geometry)
         control.node = node
         control.rebuildChild = { [content] size in
-            VStack(content: content(size)).view
+            // Called from layout — still must register Observable deps on this node.
+            node.observing { VStack(content: content(size)).view }
         }
         node.element = control
         control.addSubview(node.children[0].element(at: 0), at: 0)
@@ -29,9 +31,10 @@ import Foundation
         let control = node.element as! GeometryReaderElement
         control.node = node
         control.rebuildChild = { [content] size in
-            VStack(content: content(size)).view
+            node.observing { VStack(content: content(size)).view }
         }
-        node.children[0].update(using: VStack(content: content(geometry)))
+        let childView = node.observing { VStack(content: content(geometry)).view }
+        node.children[0].update(using: childView)
         control.syncChildElement()
     }
 
