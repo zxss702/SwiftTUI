@@ -12,6 +12,10 @@ public struct Edges: OptionSet, Sendable {
     public static let left = Edges(rawValue: 1 << 2)
     public static let right = Edges(rawValue: 1 << 3)
 
+    /// 对齐 SwiftUI：`leading`/`trailing` 在 TUI（LTR）下等价于 `left`/`right`。
+    public static var leading: Edges { .left }
+    public static var trailing: Edges { .right }
+
     public static var all: Edges { [.top, .bottom, left, right] }
     public static var horizontal: Edges { [.left, .right] }
     public static var vertical: Edges { [.top, bottom] }
