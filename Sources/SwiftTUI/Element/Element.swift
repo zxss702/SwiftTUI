@@ -72,9 +72,14 @@ import Foundation
                 window.setFirstResponder(responder)
             }
         }
+        // 惰性 ForEach 不再经 `Node.addNode` → `insertElement` 通知容器；
+        // `reconcileChildren` / Lazy 挂载只走这里。不 requestLayout 时，
+        // Menu 叠层会停在 0×0（toolbarTitleMenu / Menu 项全部点不了）。
+        layer.rootRenderer?.application?.requestLayout()
     }
 
     func removeSubview(at index: Int) {
+        guard children.indices.contains(index) else { return }
         let removing = children[index]
         window?.resignInteraction(in: removing)
         removing.willRemoveFromParent()
@@ -86,6 +91,7 @@ import Foundation
         for i in index ..< children.count {
             children[i].index = i
         }
+        layer.rootRenderer?.application?.requestLayout()
     }
 
     /// Keep `children[index]` identity-aligned with the view-graph element after an update.
@@ -140,6 +146,10 @@ import Foundation
 
     private var sizeCacheKey: Size?
     private var sizeCacheValue: Size?
+    /// Flexibility is derived from `size()` and is queried repeatedly by stack
+    /// layout sorting; cache per query dimension, invalidated with the size cache.
+    private var verticalFlexCache: (width: Extended, value: Extended)?
+    private var horizontalFlexCache: (height: Extended, value: Extended)?
 
     func size(proposedSize: Size) -> Size {
         proposedSize
@@ -159,6 +169,8 @@ import Foundation
     func invalidateSizeCacheUpward() {
         sizeCacheKey = nil
         sizeCacheValue = nil
+        verticalFlexCache = nil
+        horizontalFlexCache = nil
         parent?.invalidateSizeCacheUpward()
     }
 
@@ -166,6 +178,8 @@ import Foundation
     func invalidateSizeCache() {
         sizeCacheKey = nil
         sizeCacheValue = nil
+        verticalFlexCache = nil
+        horizontalFlexCache = nil
         for child in children {
             child.invalidateSizeCache()
         }
@@ -176,15 +190,21 @@ import Foundation
     }
 
     func horizontalFlexibility(height: Extended) -> Extended {
+        if let cache = horizontalFlexCache, cache.height == height { return cache.value }
         let minSize = size(proposedSize: Size(width: 0, height: height))
         let maxSize = size(proposedSize: Size(width: .infinity, height: height))
-        return maxSize.width - minSize.width
+        let value = maxSize.width - minSize.width
+        horizontalFlexCache = (height, value)
+        return value
     }
 
     func verticalFlexibility(width: Extended) -> Extended {
+        if let cache = verticalFlexCache, cache.width == width { return cache.value }
         let minSize = size(proposedSize: Size(width: width, height: 0))
         let maxSize = size(proposedSize: Size(width: width, height: .infinity))
-        return maxSize.height - minSize.height
+        let value = maxSize.height - minSize.height
+        verticalFlexCache = (width, value)
+        return value
     }
 
     var layoutPriority: Double { 0 }
@@ -214,6 +234,14 @@ import Foundation
     /// `handleEvent`; never fans out to the subtree.
     func handleKeyEvent(_ event: KeyEvent) {
         if let char = event.character {
+            handleEvent(char)
+        }
+    }
+
+    /// Bulk text from coalesced paste / typed burst. Default inserts one
+    /// character at a time via `handleEvent`.
+    func handleTextInput(_ string: String) {
+        for char in string {
             handleEvent(char)
         }
     }

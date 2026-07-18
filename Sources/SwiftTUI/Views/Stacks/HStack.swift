@@ -41,11 +41,13 @@ import Foundation
     }
 
     func insertElement(at index: Int, node: Node) {
-        (node.element as! HStackElement).addSubview(node.children[0].element(at: index), at: index)
+        // 以 `reconcileChildren` 为准。惰性 ForEach 不再逐条 notify，若这里再
+        // 响应 Optional.removeNode 的 removeElement，会与 ForEach 扁平下标错位
+        // 导致 `children[index]` 越界（点「更多」→ GeometryReader 测宽翻箭头）。
     }
 
     func removeElement(at index: Int, node: Node) {
-        (node.element as! HStackElement).removeSubview(at: index)
+        // 见 insertElement — updateNode 末尾 reconcileChildren 对齐整表。
     }
 
     private class HStackElement: Element {

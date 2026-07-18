@@ -77,6 +77,10 @@ import Foundation
         /// scroll-back reuses the last known size until the next measure.
         private var measuredHeights: [Int: Extended] = [:]
 
+        /// `prefixSums[i]` = 第 i 项的顶边 y；`prefixSums[n]` = 总内容高度。
+        /// 失效后按需重建，使 `position` / 可见区查找为 O(log n)。
+        private var prefixSums: [Extended]?
+
         func contentLineOffset(forIdentity id: AnyHashable) -> Extended? {
             for (index, element) in loadedElements {
                 if Self.containsIdentity(id, in: element) {
@@ -84,9 +88,13 @@ import Foundation
                 }
             }
             guard let contentNode, totalChildrenSize > 0 else { return nil }
-            // Probe unloaded slots. `element(at:)` builds without parenting into
-            // this stack; a later `updateVisibleRegion` remounts the same node.
-            for i in 0 ..< totalChildrenSize where loadedElements[i] == nil {
+            // Probe unloaded slots from the END backwards. Building a row's element
+            // forces that row's subtree (e.g. MarkdownView parse); the anchors used
+            // in this app are always a trailing `Spacer().id(...)`, so reverse order
+            // hits the anchor on the first step and builds only that one element
+            // instead of parsing every message. Correct for any id (search order
+            // only); `updateVisibleRegion` later remounts the same node.
+            for i in stride(from: totalChildrenSize - 1, through: 0, by: -1) where loadedElements[i] == nil {
                 let element = contentNode.element(at: i)
                 if Self.containsIdentity(id, in: element) {
                     return position(for: i)
@@ -108,6 +116,7 @@ import Foundation
         func clearCache() {
             unloadAllLoadedElements()
             measuredHeights.removeAll()
+            invalidatePrefixSums()
             lastStartIndex = nil
             lastEndIndex = nil
         }
@@ -118,6 +127,7 @@ import Foundation
         @discardableResult
         func reloadContent(totalChildrenSize: Int) -> Bool {
             self.totalChildrenSize = totalChildrenSize
+            invalidatePrefixSums()
             var remounted = false
             var toRemove: [Int] = []
             for (i, _) in loadedElements where i >= totalChildrenSize {
@@ -156,6 +166,7 @@ import Foundation
 
         func handleInsert(at index: Int) {
             totalChildrenSize += 1
+            invalidatePrefixSums()
             for key in loadedElements.keys.filter({ $0 >= index }).sorted(by: >) {
                 if let ctrl = loadedElements.removeValue(forKey: key) {
                     loadedElements[key + 1] = ctrl
@@ -173,6 +184,7 @@ import Foundation
 
         func handleRemove(at index: Int) {
             totalChildrenSize = max(0, totalChildrenSize - 1)
+            invalidatePrefixSums()
             unloadElement(at: index)
             measuredHeights.removeValue(forKey: index)
             for key in loadedElements.keys.filter({ $0 > index }).sorted() {
@@ -216,56 +228,82 @@ import Foundation
             measuredHeights[index] ?? estimatedItemHeight
         }
 
+        private func invalidatePrefixSums() {
+            prefixSums = nil
+        }
+
+        /// 重建前缀和：`prefix[i]` = item i 顶边，`prefix[n]` = 总高。
+        private func ensurePrefixSums() {
+            if let prefixSums, prefixSums.count == totalChildrenSize + 1 { return }
+            var prefix: [Extended] = []
+            prefix.reserveCapacity(totalChildrenSize + 1)
+            prefix.append(0)
+            guard totalChildrenSize > 0 else {
+                prefixSums = prefix
+                return
+            }
+            for i in 0 ..< totalChildrenSize {
+                var next = prefix[i] + height(at: i)
+                if i < totalChildrenSize - 1 {
+                    next += spacing
+                }
+                prefix.append(next)
+            }
+            prefixSums = prefix
+        }
+
         private func position(for index: Int) -> Extended {
             guard index > 0 else { return 0 }
-            var line: Extended = 0
-            for i in 0 ..< index {
-                line += height(at: i)
-                line += spacing
-            }
-            return line
+            ensurePrefixSums()
+            return prefixSums![min(index, totalChildrenSize)]
         }
 
         private func totalContentHeight() -> Extended {
             guard totalChildrenSize > 0 else { return 0 }
-            var total: Extended = 0
-            for i in 0 ..< totalChildrenSize {
-                total += height(at: i)
-            }
-            total += Extended(max(0, totalChildrenSize - 1)) * spacing
-            return total
+            ensurePrefixSums()
+            return prefixSums![totalChildrenSize]
         }
 
         /// First index whose frame intersects [offset, offset + viewportHeight).
         private func firstVisibleIndex(offset: Extended) -> Int {
             guard totalChildrenSize > 0 else { return 0 }
             if offset <= 0 { return 0 }
-            var line: Extended = 0
-            for i in 0 ..< totalChildrenSize {
-                let itemHeight = height(at: i)
-                let next = line + itemHeight
-                if next > offset { return i }
-                line = next + spacing
+            ensurePrefixSums()
+            let prefix = prefixSums!
+            // 最大的 i 使得 prefix[i] <= offset；若 item 完全在 offset 之上则前进。
+            var lo = 0
+            var hi = totalChildrenSize - 1
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if prefix[mid] + height(at: mid) <= offset {
+                    lo = mid + 1
+                } else {
+                    hi = mid
+                }
             }
-            return totalChildrenSize - 1
+            return lo
         }
 
         /// Last index whose frame intersects [offset, offset + viewportHeight).
         private func lastVisibleIndex(offset: Extended, viewportHeight: Extended) -> Int {
             guard totalChildrenSize > 0 else { return 0 }
             let bottom = offset + viewportHeight
-            var line: Extended = 0
-            var last = 0
-            for i in 0 ..< totalChildrenSize {
-                let itemHeight = height(at: i)
-                if line < bottom {
-                    last = i
+            ensurePrefixSums()
+            let prefix = prefixSums!
+            // 最大的 i 使得 prefix[i] < bottom
+            var lo = 0
+            var hi = totalChildrenSize - 1
+            var answer = 0
+            while lo <= hi {
+                let mid = (lo + hi) / 2
+                if prefix[mid] < bottom {
+                    answer = mid
+                    lo = mid + 1
                 } else {
-                    break
+                    hi = mid - 1
                 }
-                line += itemHeight + spacing
             }
-            return last
+            return answer
         }
 
         @discardableResult
@@ -336,9 +374,15 @@ import Foundation
             // child's measured size (so wrap uses the proposal; frame size stays honest).
             var heightsChanged = false
             let indices = loadedElements.keys.sorted()
+            var childSizes: [Int: Size] = [:]
+            childSizes.reserveCapacity(indices.count)
+
             for index in indices {
                 guard let control = loadedElements[index] else { continue }
 
+                // `size()` 现在带换行缓存，宽度/内容不变即为 O(1) 命中。据此判断该行
+                // 是否需要重新 layout：尺寸未变（滚动纯平移的常见情况）只更新位置，
+                // 跳过整棵子树的递归 layout；尺寸变化（新挂载 / 宽度变化 / 内容更新）才重排。
                 var childSize = control.size(proposedSize: Size(width: size.width, height: .infinity))
                 // Unbounded-height children cannot contribute to scroll metrics; fall back
                 // to the public estimate instead of inventing a clamped geometry.
@@ -349,8 +393,21 @@ import Foundation
                     heightsChanged = true
                 }
                 measuredHeights[index] = childSize.height
+                childSizes[index] = childSize
+            }
 
-                control.layout(size: childSize)
+            // 高度都写入后再重建前缀和，避免循环内反复 O(n) ensurePrefixSums。
+            if heightsChanged {
+                invalidatePrefixSums()
+            }
+
+            for index in indices {
+                guard let control = loadedElements[index],
+                      let childSize = childSizes[index] else { continue }
+
+                if control.layer.frame.size != childSize {
+                    control.layout(size: childSize)
+                }
                 control.layer.frame.position.line = position(for: index)
 
                 switch alignment {

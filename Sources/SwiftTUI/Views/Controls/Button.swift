@@ -41,6 +41,15 @@ import Foundation
         let control = node.element as! ButtonElement
         let newLabel = node.children[0].element(at: 0)
         control.label = newLabel
+        // Label 内 `if hover { Menu }` 等 identity 交换会走 syncChild →
+        // resignInteraction；抑制误 leave，由 Application 帧末 re-hit-test 对齐。
+        let window = control.window
+        let swapping = control.children.first.map { $0 !== newLabel } ?? true
+        let previousSuppress = window?.suppressHoverResign ?? false
+        if swapping {
+            window?.suppressHoverResign = true
+        }
+        defer { window?.suppressHoverResign = previousSuppress }
         control.syncChild(newLabel)
         control.action = action
         control.hover = hover

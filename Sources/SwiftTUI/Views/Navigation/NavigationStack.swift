@@ -72,24 +72,38 @@ private struct NavigationContainer<Root: View>: View {
 
 // MARK: - Bar
 
-/// Observes `NavigationContext.toolbarEpoch` / titles so chrome updates without
-/// invalidating the whole stack (which would re-run page body → setToolbar → loop).
+/// 导航栏：`stack` / `titles` 走 Observation；toolbar 槽位由
+/// `NavigationContext.notifyChromeChange()` **只 invalidate 本节点**刷新，
+/// 这样页面 `.toolbar` 里用 `@State` 与 SwiftUI 一样能更新，又不会和
+/// `setToolbar` 互相 Observation 死循环。
 @MainActor
-private struct NavigationBar: View {
+private struct NavigationBar: View, PrimitiveView {
     let navigateBack: () -> Void
     let context: NavigationContext
 
-    var body: some View {
-        // Read observable fields so chrome refreshes without `@Environment`
-        // (avoids escaping-closure / weak-node traps).
-        let _ = context.toolbarEpoch
+    static var size: Int? { 1 }
+
+    func buildNode(_ node: Node) {
+        context.chromeBarNode = node
+        node.addNode(at: 0, Node(view: barContent().view))
+    }
+
+    func updateNode(_ node: Node) {
+        context.chromeBarNode = node
+        // Track stack/titles for back label & plain title; toolbar slots are
+        // ObservationIgnored and refreshed via chromeBarNode invalidate.
         let _ = context.stack
+        let _ = context.titles
+        node.children[0].update(using: barContent().view)
+    }
+
+    private func barContent() -> some View {
         let toolbar = context.toolbar(for: context.currentPageID)
         let title = context.currentTitle
         let canPop = context.canPop
         let backLabel = context.backButtonLabel
 
-        HStack(spacing: 1) {
+        return HStack(spacing: 1) {
             if canPop {
                 Button(backLabel, action: navigateBack)
             }

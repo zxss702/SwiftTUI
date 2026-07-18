@@ -270,7 +270,7 @@ internal final actor POSIXTerminal: VTTerminal {
             }
             if pr == 0 { continue }
 
-            let events = try withUnsafeTemporaryAllocation(of: CChar.self, capacity: 128) {
+            let events = try withUnsafeTemporaryAllocation(of: CChar.self, capacity: 8192) {
               guard let baseAddress = $0.baseAddress else { throw POSIXError() }
               let count = read(hIn, baseAddress, $0.count)
               guard count > 0 else {
@@ -328,7 +328,7 @@ internal final actor POSIXTerminal: VTTerminal {
               }
             }
             guard StdinReaderGate.owns(stdinGeneration) else { break }
-            let coalesced = VTEvent.coalescingMouseMoves(events)
+            let coalesced = VTEvent.coalescingTerminalEvents(events)
             if !coalesced.isEmpty {
               continuation.yield(coalesced)
             }

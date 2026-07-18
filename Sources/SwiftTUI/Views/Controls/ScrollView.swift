@@ -35,6 +35,9 @@ import Foundation
         /// Cached content size from the last full layout; used to clamp scroll without re-measuring.
         var cachedContentSize: Size = .zero
         var contentOffset: Extended = 0
+        /// Last offset actually applied to the content layer; lets no-op scrolls
+        /// (already at top/bottom, nothing newly mounted) skip relayout + repaint.
+        private var lastAppliedOffset: Extended?
 
         func scrollToIdentity(_ id: AnyHashable, anchor: UnitPoint?) {
             pendingScroll = PendingScroll(id: id, anchor: anchor)
@@ -141,6 +144,7 @@ import Foundation
                 contentElement.layout(size: contentSize)
             }
             cachedContentSize = contentSize
+            lastAppliedOffset = contentOffset
             applyContentOffset(invalidateLayer: true)
         }
 
@@ -179,6 +183,11 @@ import Foundation
                 offset: contentOffset,
                 height: viewportHeight
             )
+            // Nothing to do: offset unchanged (e.g. wheel past the top/bottom edge)
+            // and no rows mounted/unmounted → avoid a redundant repaint.
+            if !lazyNeedsLayout, lastAppliedOffset == contentOffset {
+                return
+            }
             if lazyNeedsLayout {
                 contentElement.layout(size: cachedContentSize)
                 let refined = contentElement.size(
@@ -193,6 +202,7 @@ import Foundation
                 }
             }
 
+            lastAppliedOffset = contentOffset
             applyContentOffset(invalidateLayer: false)
             layer.invalidate()
         }

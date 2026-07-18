@@ -41,11 +41,11 @@ import Foundation
     }
     
     func insertElement(at index: Int, node: Node) {
-        (node.element as! ZStackElement).addSubview(node.children[0].element(at: index), at: index)
+        // 以 `reconcileChildren` 为准（同 HStack：避免 Optional + 惰性 ForEach 错位越界）。
     }
     
     func removeElement(at index: Int, node: Node) {
-        (node.element as! ZStackElement).removeSubview(at: index)
+        // 见 insertElement。
     }
     
     private class ZStackElement: Element {

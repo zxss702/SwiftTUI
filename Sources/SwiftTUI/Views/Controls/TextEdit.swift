@@ -138,8 +138,16 @@ private final class TextEditorElement: Element {
     private var lineRanges: [Range<String.Index>] = []
     private var needsRebuild = true
     private var lastBuiltWidth: Int = -1
-    private var bindingDirty = false
+    /// 按硬换行分段缓存 wrap 结果；只重排被改动的段落，避免每键全量 O(n) wrap。
+    private var paragraphWrapCache: [ParagraphWrapCache] = []
 
+    private struct ParagraphWrapCache {
+        var text: String
+        var width: Int
+        var visualLines: [String]
+        /// 相对段落起点的 UTF-16 偏移区间（不含跨段）。
+        var relativeRanges: [(lower: Int, upper: Int)]
+    }
     // MARK: - Selection / undo state
 
     /// Selection anchor; the head is `cursorIndex`.
@@ -259,9 +267,8 @@ private final class TextEditorElement: Element {
         needsRebuild = true
         ensureVisualLines()
         scrollToKeepCursorVisible()
-        bindingDirty = true
+        commitBindingNow()
         layer.invalidate()
-        layer.rootRenderer?.application?.noteEditorNeedsCommit(self)
     }
 
     init(text: Binding<String>, isEnabled: Bool) {
@@ -271,20 +278,15 @@ private final class TextEditorElement: Element {
         self.cursorIndex = cachedText.endIndex
     }
 
-    override var needsBindingCommit: Bool { bindingDirty }
-
-    override func commitBindingIfNeeded() {
-        guard bindingDirty else { return }
-        bindingDirty = false
-        // Real Binding write: dependents (`frame(maxHeight:)`, `onChange`, …)
-        // must see the new value and re-evaluate their body.
+    /// Write Binding immediately so Observation / `onChange` always see content changes.
+    private func commitBindingNow() {
         text.wrappedValue = cachedText
     }
 
     /// Returns true when cached text was replaced from an external Binding write.
+    /// External Binding always wins over the local buffer.
     @discardableResult
     func syncFromBinding() -> Bool {
-        if bindingDirty { return false }
         let newText = text.wrappedValue
         guard newText != cachedText else { return false }
         let distance = cachedText.distance(from: cachedText.startIndex, to: min(cursorIndex, cachedText.endIndex))
@@ -332,39 +334,117 @@ private final class TextEditorElement: Element {
         visualLines.removeAll(keepingCapacity: true)
         lineRanges.removeAll(keepingCapacity: true)
 
-        let units: [TextLayout.LaidOutLine.Unit] = cachedText.enumerated().map {
-            TextLayout.LaidOutLine.Unit(char: $0.element, sourceIndex: $0.offset)
-        }
-        let lines = TextLayout.wrap(units, width: max(width, 1))
+        let width = max(width, 1)
+        var nextCache: [ParagraphWrapCache] = []
+        nextCache.reserveCapacity(paragraphWrapCache.count + 1)
 
-        var searchStart = cachedText.startIndex
-        for line in lines {
-            visualLines.append(line.string)
+        var paraStart = cachedText.startIndex
+        while true {
+            let paraEnd = endOfParagraph(from: paraStart)
+            let paraText = String(cachedText[paraStart ..< paraEnd])
+            let baseOffset = cachedText.distance(from: cachedText.startIndex, to: paraStart)
 
-            if line.units.isEmpty {
-                if searchStart < cachedText.endIndex, cachedText[searchStart] == "\n" {
-                    let end = cachedText.index(after: searchStart)
-                    lineRanges.append(searchStart ..< end)
-                    searchStart = end
-                } else {
-                    lineRanges.append(searchStart ..< searchStart)
-                }
-                continue
+            let wrapped: ParagraphWrapCache
+            if let hit = paragraphWrapCache.first(where: { $0.text == paraText && $0.width == width }) {
+                wrapped = hit
+            } else {
+                wrapped = wrapParagraph(paraText, width: width)
+            }
+            nextCache.append(wrapped)
+
+            for (i, line) in wrapped.visualLines.enumerated() {
+                visualLines.append(line)
+                let rel = wrapped.relativeRanges[i]
+                let lower = cachedText.index(cachedText.startIndex, offsetBy: baseOffset + rel.lower)
+                let upper = cachedText.index(cachedText.startIndex, offsetBy: baseOffset + rel.upper)
+                lineRanges.append(lower ..< upper)
             }
 
-            let firstOffset = line.units.compactMap(\.sourceIndex).min()!
-            let lastOffset = line.units.compactMap(\.sourceIndex).max()!
-            let rangeStart = cachedText.index(cachedText.startIndex, offsetBy: firstOffset)
-            var rangeEnd = cachedText.index(cachedText.startIndex, offsetBy: lastOffset + 1)
-            if rangeEnd < cachedText.endIndex, cachedText[rangeEnd] == "\n" {
-                rangeEnd = cachedText.index(after: rangeEnd)
-            }
-            lineRanges.append(rangeStart ..< rangeEnd)
-            searchStart = rangeEnd
+            if paraEnd == cachedText.endIndex { break }
+            paraStart = paraEnd
         }
 
+        if visualLines.isEmpty {
+            visualLines.append("")
+            lineRanges.append(cachedText.endIndex ..< cachedText.endIndex)
+        }
+
+        paragraphWrapCache = nextCache
         needsRebuild = false
         lastBuiltWidth = width
+        clampContentOffset()
+    }
+
+    /// Keep scroll offset inside the rebuilt line list so `draw` never forms
+    /// `startLine..<endLine` with `startLine > endLine` (Swift Range trap).
+    private func clampContentOffset() {
+        let height = max(layer.frame.size.height.intValue, 1)
+        let maxOffset = max(0, visualLines.count - height)
+        let current = contentOffset.intValue
+        if current < 0 {
+            contentOffset = 0
+        } else if current > maxOffset {
+            contentOffset = Extended(maxOffset)
+        }
+    }
+
+    private func endOfParagraph(from start: String.Index) -> String.Index {
+        var end = start
+        while end < cachedText.endIndex {
+            if cachedText[end] == "\n" {
+                return cachedText.index(after: end)
+            }
+            end = cachedText.index(after: end)
+        }
+        return end
+    }
+
+    private func wrapParagraph(_ paraText: String, width: Int) -> ParagraphWrapCache {
+        let units: [TextLayout.LaidOutLine.Unit] = paraText.enumerated().map {
+            TextLayout.LaidOutLine.Unit(char: $0.element, sourceIndex: $0.offset)
+        }
+        let lines = TextLayout.wrap(units, width: width)
+        var visual: [String] = []
+        var ranges: [(Int, Int)] = []
+        var searchStart = 0
+        let paraCount = paraText.count
+
+        for line in lines {
+            visual.append(line.string)
+            if line.units.isEmpty {
+                if searchStart < paraCount {
+                    let idx = paraText.index(paraText.startIndex, offsetBy: searchStart)
+                    if paraText[idx] == "\n" {
+                        ranges.append((searchStart, searchStart + 1))
+                        searchStart += 1
+                        continue
+                    }
+                }
+                ranges.append((searchStart, searchStart))
+                continue
+            }
+            let first = line.units.compactMap(\.sourceIndex).min()!
+            let last = line.units.compactMap(\.sourceIndex).max()!
+            var upper = last + 1
+            if upper < paraCount {
+                let idx = paraText.index(paraText.startIndex, offsetBy: upper)
+                if paraText[idx] == "\n" { upper += 1 }
+            }
+            ranges.append((first, upper))
+            searchStart = upper
+        }
+
+        if visual.isEmpty {
+            visual = [""]
+            ranges = [(0, paraText.count)]
+        }
+
+        return ParagraphWrapCache(
+            text: paraText,
+            width: width,
+            visualLines: visual,
+            relativeRanges: ranges
+        )
     }
 
     private func getVisualPosition(for index: String.Index) -> (line: Int, col: Int) {
@@ -404,12 +484,22 @@ private final class TextEditorElement: Element {
 
     override func draw(into buffer: inout ScreenBuffer) {
         ensureVisualLines()
-        let height = layer.frame.size.height.intValue
+        clampContentOffset()
+        let height = max(layer.frame.size.height.intValue, 0)
         let width = layer.frame.size.width.intValue
-        let startLine = contentOffset.intValue
+        let startLine = min(max(0, contentOffset.intValue), visualLines.count)
         let endLine = min(visualLines.count, startLine + height)
 
         let selection = selectionRange
+
+        guard startLine < endLine else {
+            for i in 0..<height {
+                for x in 0..<width {
+                    buffer.setCell(Cell(char: " "), at: Position(column: Extended(x), line: Extended(i)))
+                }
+            }
+            return
+        }
 
         for i in startLine..<endLine {
             let lineStr = visualLines[i]
@@ -482,12 +572,13 @@ private final class TextEditorElement: Element {
 
     private func scrollToKeepCursorVisible() {
         let pos = getVisualPosition(for: cursorIndex)
-        let frameHeight = layer.frame.size.height.intValue
+        let frameHeight = max(layer.frame.size.height.intValue, 1)
         if pos.line < contentOffset.intValue {
             contentOffset = Extended(pos.line)
         } else if pos.line >= contentOffset.intValue + frameHeight {
             contentOffset = Extended(pos.line - frameHeight + 1)
         }
+        clampContentOffset()
     }
 
     private func applyTextMutation(
@@ -500,9 +591,26 @@ private final class TextEditorElement: Element {
         needsRebuild = true
         ensureVisualLines()
         scrollToKeepCursorVisible()
-        bindingDirty = true
+        commitBindingNow()
         layer.invalidate()
-        layer.rootRenderer?.application?.noteEditorNeedsCommit(self)
+    }
+
+    /// Bulk insert (paste / coalesced burst): one mutation, one Binding write, one paint.
+    override func handleTextInput(_ string: String) {
+        guard isEnabledFlag, !string.isEmpty else { return }
+        ensureVisualLines()
+        applyTextMutation(undoGroup: nil) {
+            removeSelectedText()
+            let distance = cachedText.distance(from: cachedText.startIndex, to: cursorIndex)
+            cachedText.insert(contentsOf: string, at: cursorIndex)
+            cursorIndex = cachedText.index(
+                cachedText.startIndex,
+                offsetBy: min(distance + string.count, cachedText.count),
+                limitedBy: cachedText.endIndex
+            ) ?? cachedText.endIndex
+        }
+        lastInsertedCharacter = string.last
+        lastEditGroup = nil
     }
 
     override var cursorPosition: Position? {

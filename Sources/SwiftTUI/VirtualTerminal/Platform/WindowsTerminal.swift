@@ -248,7 +248,7 @@ internal final actor WindowsTerminal: VTTerminal {
               }
             }
 
-            let coalesced = VTEvent.coalescingMouseMoves(events)
+            let coalesced = VTEvent.coalescingTerminalEvents(events)
             if !coalesced.isEmpty {
               continuation.yield(coalesced)
             }

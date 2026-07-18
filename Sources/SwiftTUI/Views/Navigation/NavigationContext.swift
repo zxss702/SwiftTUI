@@ -65,17 +65,18 @@ struct NavigationRootID: Hashable {
     /// 页面标题：key 为页面 id（根页用 `NavigationRootID`，其余为栈上的值）
     var titles: [AnyHashable: String] = [:]
 
-    /// 各页工具栏三槽；写入时 bump `toolbarEpoch` 以刷新 NavigationBar。
+    /// 各页工具栏三槽；写入时经 ``notifyChromeChange()`` 只弄脏 NavigationBar 节点。
     @ObservationIgnored
     var toolbars: [AnyHashable: NavigationToolbarContent] = [:]
 
-    /// NavigationBar 观察此值以在 toolbar 内容变化时刷新。
-    var toolbarEpoch: Int = 0
-
-    /// Last page id that already published a toolbarEpoch bump this visit.
-    /// Prevents every keystroke body re-eval from bumping chrome (invalidate storm).
+    /// 调试/测试用世代计数；**不是** Observation 依赖（见 ``notifyChromeChange()``）。
     @ObservationIgnored
-    private var chromePublishedForPage: AnyHashable?
+    private(set) var toolbarEpoch: Int = 0
+
+    /// NavigationBar 的视图节点；toolbar / title 变更时只 invalidate 它，
+    /// 避免经 Observation 误伤页面（页面 setToolbar 曾因此与 chrome 互刷死循环）。
+    @ObservationIgnored
+    weak var chromeBarNode: Node?
 
     /// 当前页 id
     var currentPageID: AnyHashable {
@@ -120,7 +121,6 @@ struct NavigationRootID: Hashable {
 
     public func push<V: Hashable>(_ value: V) {
         stack.append(AnyHashable(value))
-        chromePublishedForPage = nil
         syncToBinding()
     }
 
@@ -128,7 +128,6 @@ struct NavigationRootID: Hashable {
         let key = AnyHashable(id)
         directDestinations[key] = destination
         stack.append(key)
-        chromePublishedForPage = nil
         syncToBinding()
     }
 
@@ -138,7 +137,6 @@ struct NavigationRootID: Hashable {
         directDestinations.removeValue(forKey: removed)
         titles.removeValue(forKey: removed)
         toolbars.removeValue(forKey: removed)
-        chromePublishedForPage = nil
         notifyChromeChange()
         syncToBinding()
         notifyItemBridges()
@@ -191,37 +189,25 @@ struct NavigationRootID: Hashable {
     }
 
     func setToolbar(_ content: NavigationToolbarContent, for id: AnyHashable) {
-        // Always replace slot views (AnyView identity); bump chrome only once per
-        // page visit. Re-registering on every body eval (e.g. TextEditor @State)
-        // used to invalidate NavigationBar continuously.
-        // Preserve titleMenu from `.toolbarTitleMenu` when the toolbar builder
-        // did not include `ToolbarTitleMenu`.
+        // Align SwiftUI: page `@State` used inside `.toolbar` must refresh the bar
+        // on every page body re-eval. Preserve titleMenu from `.toolbarTitleMenu`
+        // when the toolbar builder did not include `ToolbarTitleMenu`.
         var merged = content
         if merged.titleMenu == nil {
             merged.titleMenu = toolbars[id]?.titleMenu
         }
         toolbars[id] = merged
         guard id == currentPageID else { return }
-        guard chromePublishedForPage != id else { return }
-        chromePublishedForPage = id
-        toolbarEpoch &+= 1
+        notifyChromeChange()
     }
 
     /// 由页面 `.toolbarTitleMenu` 上报；与三槽合并，不互相覆盖。
     func setTitleMenu(_ menu: AnyView, for id: AnyHashable) {
         var content = toolbars[id] ?? .empty
-        let hadMenu = content.titleMenu != nil
         content.titleMenu = menu
         toolbars[id] = content
         guard id == currentPageID else { return }
-        // First titleMenu this visit must refresh the bar even if slots already published.
-        if !hadMenu {
-            chromePublishedForPage = id
-            toolbarEpoch &+= 1
-        } else if chromePublishedForPage != id {
-            chromePublishedForPage = id
-            toolbarEpoch &+= 1
-        }
+        notifyChromeChange()
     }
 
     func toolbar(for id: AnyHashable) -> NavigationToolbarContent {
@@ -232,8 +218,13 @@ struct NavigationRootID: Hashable {
         toolbar(for: currentPageID)
     }
 
+    /// 对齐 SwiftUI：页面 `@State` 写进 `.toolbar` 后 chrome 必须更新；
+    /// 只 invalidate NavigationBar 节点，不写可被页面 tracking 到的 Observable 属性。
     private func notifyChromeChange() {
-        toolbarEpoch &+= 1
+        toolbarEpoch += 1
+        guard let node = chromeBarNode else { return }
+        guard let app = node.root.application, node.isAttached(to: app) else { return }
+        app.invalidateNode(node)
     }
 
     func destinationView(for value: AnyHashable) -> AnyView? {
@@ -260,7 +251,6 @@ struct NavigationRootID: Hashable {
         let newStack = pathSync.read()
         guard newStack != stack else { return }
         stack = newStack
-        chromePublishedForPage = nil
         notifyItemBridges()
     }
 

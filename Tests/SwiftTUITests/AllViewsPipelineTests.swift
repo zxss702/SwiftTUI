@@ -47,10 +47,57 @@ struct AllViewsPipelineTests {
     @Test func lazyVStack() async throws {
         try await assertIdle(LazyVStack { ForEach(0 ..< 5, id: \.self) { Text("\($0)") } })
     }
+    /// 回归：惰性 ForEach 遇 EmptyView（size==0）不能 element(at:0) 崩溃。
+    @Test func lazyVStackForEachWithEmptyRows() async throws {
+        try await assertIdle(
+            ScrollView {
+                LazyVStack {
+                    ForEach(0 ..< 20, id: \.self) { i in
+                        if i % 3 == 0 {
+                            EmptyView()
+                        } else {
+                            Text("row-\(i)")
+                        }
+                    }
+                }
+            }
+        )
+    }
     @Test func lazyVGrid() async throws {
         try await assertIdle(LazyVGrid(columns: [GridItem(.flexible())]) {
             ForEach(0 ..< 4, id: \.self) { Text("\($0)") }
         })
+    }
+    /// 回归：惰性 ForEach 产出 Section 时，LazyVGrid 必须展开 section plan，
+    /// 不能因 children 为空把 footer/cell 压成同一网格行（变更界面崩坏）。
+    @Test func lazyVGridForEachSections() async throws {
+        try await assertIdle(
+            ScrollView {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                        GridItem(.flexible()),
+                    ],
+                    alignment: .leading,
+                    spacing: 1,
+                    pinnedViews: .sectionFooters
+                ) {
+                    Section {} footer: {
+                        Text("最新")
+                    }
+                    ForEach(0 ..< 3, id: \.self) { i in
+                        Section {
+                            Text("node_\(i)_a")
+                            Text("node_\(i)_b")
+                        } footer: {
+                            Text("footer-\(i)")
+                        }
+                    }
+                }
+            }
+        )
     }
     @Test func scrollView() async throws {
         try await assertIdle(ScrollView { VStack { Text("1"); Text("2") } })

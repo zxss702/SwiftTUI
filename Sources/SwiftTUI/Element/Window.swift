@@ -132,6 +132,15 @@ struct WeakElementRef {
             presentationFrozenHover = nil
         }
 
+        // 旧 path 元素已全部销毁（如 Button label syncChild），但仍有弱引用残留：
+        // compactMap 后 oldPath 为空，无法派发 leave → `@State onHover` 卡住。
+        // 此时若新 hover 为 nil，清掉残留 refs，避免假悬停。
+        if control == nil, oldPath.isEmpty, !hoverPathRefs.isEmpty {
+            hoverPathRefs = []
+            hoveredElement = nil
+            return
+        }
+
         for item in oldPath where !newIDs.contains(ObjectIdentifier(item)) {
             // Freeze underlying hover for the whole time a presentation is open,
             // even before the floating host element is mounted.

@@ -71,21 +71,24 @@ import Foundation
 
         override func layout(size: Size) {
             super.layout(size: size)
-            // Never publish ∞ — `Extended.intValue` / `widthInt` would trap.
-            let published = Size(
-                width: size.width == .infinity ? max(geometry.wrappedValue.width, 1) : size.width,
-                height: size.height == .infinity ? max(geometry.wrappedValue.height, 1) : size.height
-            )
+            // Never publish ∞ / 0 probes — only real finite sizes refresh content.
+            var published = geometry.wrappedValue
+            if size.width != .infinity, size.width > 0 {
+                published.width = size.width
+            }
+            if size.height != .infinity, size.height > 0 {
+                published.height = size.height
+            }
             if geometry.wrappedValue != published {
                 geometry.setValue(published, invalidate: false)
                 rebuildContent(with: published)
             }
             if !children.isEmpty {
                 let childLayoutSize = Size(
-                    width: size.width == .infinity ? published.width : size.width,
+                    width: size.width == .infinity ? published.width : max(size.width, published.width),
                     height: size.height == .infinity
                         ? children[0].size(proposedSize: Size(width: published.width, height: .infinity)).height
-                        : size.height
+                        : (size.height > 0 ? size.height : published.height)
                 )
                 children[0].layout(size: childLayoutSize)
             }
@@ -95,14 +98,17 @@ import Foundation
         /// measure continues. Critical inside ScrollView / LazyVStack: the first
         /// `size(proposed:)` already knows the stack width, but body would
         /// otherwise still close over the placeholder `width: 1`.
+        ///
+        /// Size unchanged → no rebuild. Skip 0 / negative probes (HStack min
+        /// flexibility) so they never trash geometry or rebuild the subtree.
         private func publishFiniteAxes(from proposed: Size) {
             var next = geometry.wrappedValue
             var changed = false
-            if proposed.width != .infinity, next.width != proposed.width {
+            if proposed.width != .infinity, proposed.width > 0, next.width != proposed.width {
                 next.width = proposed.width
                 changed = true
             }
-            if proposed.height != .infinity, next.height != proposed.height {
+            if proposed.height != .infinity, proposed.height > 0, next.height != proposed.height {
                 next.height = proposed.height
                 changed = true
             }
@@ -111,6 +117,7 @@ import Foundation
             rebuildContent(with: next)
         }
 
+        /// Rebuild only when the published size actually changed.
         private func rebuildContent(with size: Size) {
             guard let node, let rebuildChild, !node.children.isEmpty else { return }
             node.children[0].update(using: rebuildChild(size))

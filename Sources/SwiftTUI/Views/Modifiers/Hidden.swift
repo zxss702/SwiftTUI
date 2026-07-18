@@ -57,6 +57,11 @@ private struct HiddenModifier<Content: View>: View, PrimitiveView, ModifierView 
                     resignFocusIfNeeded()
                     layer.invalidate()
                     if !isHidden {
+                        // 立刻用当前尺寸布局子树，避免等下一帧前 Menu 等控件停在 0×0。
+                        let size = layer.frame.size
+                        if size.width > 0, size.height > 0, !children.isEmpty {
+                            children[0].layout(size: size)
+                        }
                         layer.rootRenderer?.application?.requestLayout()
                     }
                 }
@@ -74,7 +79,8 @@ private struct HiddenModifier<Content: View>: View, PrimitiveView, ModifierView 
 
         override func layout(size: Size) {
             super.layout(size: size)
-            // Skip laying out covered keep-alive pages (ScrollView offsets / dirty).
+            // Keep-alive 被盖住的页跳过布局（避免后台 ScrollView/TextEdit 风暴）；
+            // 可见时正常布局。`.hidden` 刚切到 false 时 didSet 已补一帧子布局。
             if !isHidden {
                 children[0].layout(size: size)
             }

@@ -29,20 +29,46 @@ private struct IdentityAnchor<Content: View>: View, PrimitiveView, ModifierView 
 
     func buildNode(_ node: Node) {
         node.elements = WeakSet<Element>()
+        node.storage["identity.id"] = id
         node.addNode(at: 0, Node(view: content.view))
     }
 
     func updateNode(_ node: Node) {
+        let previousID = node.storage["identity.id"] as? AnyHashable
         node.view = self
-        node.children[0].update(using: content.view)
-        for control in node.elements?.values ?? [] {
-            (control as! IdentityAnchorElement).id = id
+        node.storage["identity.id"] = id
+
+        // 对齐 SwiftUI `.id`：identity 变化时销毁并重建子树（否则同类型
+        // `ManagementDialogueView` 会原地 update，`@Query` 过滤器/状态不换）。
+        // 同时仍保留滚动定位用的 IdentityAnchorElement.id。
+        if previousID != id {
+            if !node.children.isEmpty {
+                node.removeNode(at: 0)
+            }
+            node.addNode(at: 0, Node(view: content.view))
+            for control in node.elements?.values ?? [] {
+                let anchor = control as! IdentityAnchorElement
+                anchor.id = id
+                let fresh = node.children[0].element(at: 0)
+                anchor.syncChild(fresh)
+            }
+        } else {
+            node.children[0].update(using: content.view)
+            for control in node.elements?.values ?? [] {
+                (control as! IdentityAnchorElement).id = id
+            }
         }
     }
 
     func passElement(_ control: Element, node: Node) -> Element {
         if let existing = control.parent as? IdentityAnchorElement {
             existing.id = id
+            return existing
+        }
+        // 复用本节点已有的锚点，避免 `.id` 重建内容时叠出多个 wrapper。
+        if let existing = node.elements?.values.compactMap({ $0 as? IdentityAnchorElement }).first {
+            existing.id = id
+            existing.syncChild(control)
             return existing
         }
         let wrapper = IdentityAnchorElement(id: id)

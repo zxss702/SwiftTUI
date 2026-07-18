@@ -98,7 +98,20 @@ final class Node {
     }
 
     func update(using view: GenericView) {
-        build()
+        // Lazy build boundary: never force-build a not-yet-built node just because
+        // an ancestor is propagating an update. Stash the latest view so the next
+        // on-demand `build()` (mount / `size` / `element(at:)`) uses fresh data.
+        //
+        // This is what keeps `LazyVStack` actually lazy: `updateNode` runs
+        // `children[0].update(...)` over the whole content subtree on every
+        // ancestor update (and `ForEach` can't skip class-backed rows), which
+        // would otherwise build — and parse the `MarkdownView` of — every
+        // off-screen row. Off-screen rows stop at their (unbuilt) `VStack`/row
+        // boundary and only build when scrolled into view.
+        if !built {
+            self.view = view
+            return
+        }
         withObservationTracking {
             view.updateNode(self)
         } onChange: { [weak self] in
@@ -120,6 +133,11 @@ final class Node {
     /// The node does not need to be fully built for the size to be computed.
     var size: Int {
         if let size = type(of: view).size { return size }
+        // 惰性 ForEach：返回扁平控件数（各行 size 之和）；行 Node 按需创建。
+        if view is ContiguousChildSource {
+            build()
+            return (view as! ContiguousChildSource).childCount(node: self)
+        }
         build()
         return children.map(\.size).reduce(0, +)
     }
@@ -199,6 +217,13 @@ final class Node {
     func element(at offset: Int) -> Element {
         build()
         if offset == 0, let element = self.element { return element }
+        if let source = view as? ContiguousChildSource {
+            let element = source.element(node: self, at: offset)
+            if !(view is OptionalView), let modifier = self.view as? ModifierView {
+                return modifier.passElement(element, node: self)
+            }
+            return element
+        }
         var i = 0
         for child in children {
             let size = child.size
@@ -215,6 +240,32 @@ final class Node {
     }
 
     // MARK: - Container changes
+
+    /// `ContiguousChildSource`（惰性 ForEach）在差量增删时通知布局，无需物化行 content。
+    func notifyContiguousInsert(at offset: Int) {
+        guard built else { return }
+        insertElement(at: offset)
+    }
+
+    func notifyContiguousRemove(at offset: Int) {
+        guard built else { return }
+        removeElement(at: offset)
+    }
+
+    /// 挂上惰性行 Node（不走 `addNode`，避免立刻 `insertElement` / 物化布局）。
+    func attachContiguousChild(_ child: Node, at index: Int) {
+        guard child.parent == nil else { fatalError("Node is already in tree") }
+        child.parent = self
+        child.index = index
+    }
+
+    func detachContiguousChild(_ child: Node) {
+        child.parent = nil
+    }
+
+    func setContiguousChildIndex(_ child: Node, _ index: Int) {
+        child.index = index
+    }
 
     private func insertElement(at offset: Int) {
         if !(view is OptionalView), let container = view as? LayoutRootView {

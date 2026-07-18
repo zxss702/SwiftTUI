@@ -103,4 +103,46 @@ struct GeometryReaderScrollTests {
         try await app.testing_drainUntilIdle()
         #expect(box.width == 88, "got \(box.width)")
     }
+
+    /// size 不变不重建：稳定后多次 layout / 滚动不应继续增加 build 次数。
+    @Test func geometryReaderDoesNotRebuildWhenSizeUnchanged() async throws {
+        final class Box: @unchecked Sendable {
+            var builds = 0
+            var widths: [Int] = []
+        }
+        let box = Box()
+        struct Root: View {
+            let box: Box
+            var body: some View {
+                HStack {
+                    GeometryReader { size in
+                        let _ = {
+                            box.builds += 1
+                            box.widths.append(size.widthInt)
+                        }()
+                        Text("w=\(size.widthInt)")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Text("side")
+                }
+            }
+        }
+
+        let app = Application(rootView: Root(box: box))
+        try await app.testing_prepare(size: Size(width: 60, height: 10))
+        try await app.testing_drainUntilIdle()
+        let buildsAfterSettle = box.builds
+        #expect(buildsAfterSettle >= 1)
+        #expect(!box.widths.contains(0), "0-width probes must not publish: \(box.widths)")
+
+        app.requestLayout()
+        try await app.testing_drainUntilIdle()
+        app.requestLayout()
+        try await app.testing_drainUntilIdle()
+
+        #expect(
+            box.builds == buildsAfterSettle,
+            "same size must not rebuild (was \(buildsAfterSettle), now \(box.builds))"
+        )
+    }
 }

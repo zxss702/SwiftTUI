@@ -188,8 +188,6 @@ final class TextFieldElement: Element {
     /// 可见窗口左侧列偏移。
     private var scrollOffset: Int = 0
     private var cachedText: String = ""
-    /// Local buffer is authoritative until the next frame commits Binding.
-    private var bindingDirty = false
     private var editGeneration: UInt64 = 0
 
     // MARK: - Selection / undo state
@@ -328,27 +326,16 @@ final class TextFieldElement: Element {
         self.cursorIndex = cachedText.count
     }
 
-    override var needsBindingCommit: Bool { bindingDirty }
-
-    override func commitBindingIfNeeded() {
-        guard bindingDirty else { return }
-        bindingDirty = false
-        // Real Binding write: dependents must re-evaluate (onChange, derived layout).
-        text.wrappedValue = cachedText
-    }
-
     private func stageLocalEdit() {
         editGeneration &+= 1
-        bindingDirty = true
         ensureCursorVisible()
+        text.wrappedValue = cachedText
         layer.invalidate()
-        layer.rootRenderer?.application?.noteEditorNeedsCommit(self)
     }
 
+    /// External Binding always wins over the local buffer.
     @discardableResult
     func syncFromBinding() -> Bool {
-        // Local edits win until frame commit; ignore Binding that still lags.
-        if bindingDirty { return false }
         let newText = text.wrappedValue
         guard newText != cachedText else { return false }
         cachedText = newText
@@ -357,6 +344,25 @@ final class TextFieldElement: Element {
         maskSecureImmediately()
         ensureCursorVisible()
         return true
+    }
+
+    /// Bulk insert (paste / coalesced burst): one Binding write, one paint.
+    override func handleTextInput(_ string: String) {
+        guard isEnabledFlag, !string.isEmpty else { return }
+        recordUndo(group: nil)
+        removeSelectedCharacters()
+        var chars = Array(cachedText)
+        let insertAt = min(cursorIndex, chars.count)
+        chars.insert(contentsOf: Array(string), at: insertAt)
+        cachedText = String(chars)
+        cursorIndex = min(insertAt + string.count, cachedText.count)
+        lastInsertedCharacter = string.last
+        lastEditGroup = nil
+        if secure {
+            let revealAt = min(insertAt, max(0, cachedText.count - 1))
+            revealSecureCharacter(at: revealAt)
+        }
+        stageLocalEdit()
     }
 
     /// Text entry — the only controls that take keyboard first-responder focus.
@@ -386,8 +392,6 @@ final class TextFieldElement: Element {
         guard isEnabledFlag else { return }
         if char == "\n" {
             maskSecureImmediately()
-            // Flush Binding before submit so handlers see final text.
-            bindingDirty = false
             text.wrappedValue = cachedText
             submitAction?()
             legacyAction?(cachedText)

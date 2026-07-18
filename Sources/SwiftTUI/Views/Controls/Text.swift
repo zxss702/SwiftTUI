@@ -65,6 +65,9 @@ import Foundation
             || previousLineLimit != lineLimit
             || previousTruncation != truncationMode
         {
+            // Content affecting measurement changed: drop stale size / flexibility
+            // caches on self and ancestors so the next layout measures fresh.
+            control.invalidateSizeCacheUpward()
             let width = control.layer.frame.size.width
             if width > 0 {
                 let measured = control.size(proposedSize: Size(width: width, height: .infinity))
@@ -98,7 +101,59 @@ import Foundation
         var lineLimit: Int?
         var truncationMode: Text.TruncationMode
 
+        /// 当前用于绘制 / 命中测试的换行结果（宽度与 `layer.frame` 一致）。
         private var cachedLines: [TextLayout.LaidOutLine] = []
+
+        // MARK: 换行缓存
+        //
+        // `size()` / `layout()` 会以多个宽度（∞ / 0 / 有限）被反复调用（VStack 排序的
+        // flexibility、ScrollView refine、LazyVStack 多趟布局）。这里按宽度缓存换行结果，
+        // 只要 (文字, lineLimit, truncationMode) 不变就直接复用，避免重复整段换行。
+        // 纯 Foundation + Dictionary，MainActor 隔离，跨平台安全。
+        private struct LineCacheSignature: Equatable {
+            var text: String
+            var lineLimit: Int?
+            var truncationMode: Text.TruncationMode
+        }
+        private var lineCacheSignature: LineCacheSignature?
+        private var lineCache: [Int: [TextLayout.LaidOutLine]] = [:]
+        private var cachedIntrinsicWidth: Int?
+
+        private func ensureCacheFresh() {
+            let signature = LineCacheSignature(
+                text: text,
+                lineLimit: lineLimit,
+                truncationMode: truncationMode
+            )
+            if lineCacheSignature != signature {
+                lineCacheSignature = signature
+                lineCache.removeAll(keepingCapacity: true)
+                cachedIntrinsicWidth = nil
+            }
+        }
+
+        private func laidOutLines(width: Int) -> [TextLayout.LaidOutLine] {
+            ensureCacheFresh()
+            if let cached = lineCache[width] {
+                return cached
+            }
+            let lines = TextLayout.lines(
+                for: text,
+                width: width,
+                lineLimit: lineLimit,
+                truncationMode: truncationMode
+            )
+            lineCache[width] = lines
+            return lines
+        }
+
+        private func intrinsicWidth() -> Int {
+            ensureCacheFresh()
+            if let cachedIntrinsicWidth { return cachedIntrinsicWidth }
+            let width = max(text.width, 1)
+            cachedIntrinsicWidth = width
+            return width
+        }
 
         init(
             text: String,
@@ -124,26 +179,17 @@ import Foundation
 
         override func size(proposedSize: Size) -> Size {
             let width = resolvedWidth(proposedSize: proposedSize)
-            cachedLines = TextLayout.lines(
-                for: text,
-                width: width,
-                lineLimit: lineLimit,
-                truncationMode: truncationMode
-            )
-            let contentWidth = cachedLines.map(\.visualWidth).max() ?? 0
-            let height = max(cachedLines.count, 1)
+            let lines = laidOutLines(width: width)
+            cachedLines = lines
+            let contentWidth = lines.map(\.visualWidth).max() ?? 0
+            let height = max(lines.count, 1)
             return Size(width: Extended(contentWidth), height: Extended(height))
         }
 
         override func layout(size: Size) {
             super.layout(size: size)
             let width = max(size.width.intValue, 1)
-            cachedLines = TextLayout.lines(
-                for: text,
-                width: width,
-                lineLimit: lineLimit,
-                truncationMode: truncationMode
-            )
+            cachedLines = laidOutLines(width: width)
         }
 
         /// Claim clicks only when attributed text contains link URLs.
@@ -287,7 +333,7 @@ import Foundation
         private func resolvedWidth(proposedSize: Size) -> Int {
             if proposedSize.width == .infinity {
                 // 无宽度约束时按单行完整内容测量；lineLimit 只限制高度行数
-                return max(text.width, 1)
+                return intrinsicWidth()
             }
             return max(proposedSize.width.intValue, 1)
         }

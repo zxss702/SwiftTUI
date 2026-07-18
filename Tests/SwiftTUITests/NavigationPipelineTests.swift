@@ -294,6 +294,79 @@ struct NavigationPipelineTests {
         #expect(hit !== midLink)
         #expect(!app.hasPendingCommitWork)
     }
+
+    /// Settings → 管理模型 → 编辑：双层 push 后 ScrollView 内 bordered TextField
+    /// 必须能点击获得 firstResponder 并接收按键。
+    @Test func nestedPushScrollViewTextFieldAcceptsTyping() async throws {
+        final class Box { var name = "" }
+        let box = Box()
+        struct Root: View {
+            let binding: Binding<String>
+            var body: some View {
+                NavigationStack {
+                    VStack {
+                        Text("settings-root")
+                        NavigationLink("manage", value: 1)
+                    }
+                    .navigationDestination(for: Int.self) { n in
+                        if n == 1 {
+                            VStack {
+                                Text("model-list")
+                                NavigationLink("edit", value: 2)
+                            }
+                        } else {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("edit-form")
+                                    HStack {
+                                        Text("名称")
+                                            .bold()
+                                            .frame(width: 8)
+                                        TextField("placeholder", text: binding)
+                                            .labelsHidden()
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .border(style: .rounded)
+                                    }
+                                }
+                                .padding(1)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let binding = Binding(
+            get: { box.name },
+            set: { box.name = $0 }
+        )
+        let app = Application(rootView: Root(binding: binding))
+        try await app.testing_prepare(size: Size(width: 60, height: 20))
+
+        try await click(try #require(findButtonLabeled("manage", in: app.testing_rootElement)), on: app)
+        try await click(try #require(findButtonLabeled("edit", in: app.testing_rootElement)), on: app)
+        #expect(findText(in: app.testing_rootElement, equalTo: "edit-form") != nil)
+
+        let field = try #require(findTextField(in: app.testing_rootElement))
+        #expect(field.absoluteFrame.size.width > 0, "TextField must have non-zero frame")
+
+        let pos = center(of: field)
+        // Do not force setFirstResponder — click path must win focus.
+        try await app.testing_turn(input: .mouse(MouseEvent(position: pos, type: .pressed(.left))))
+        try await app.testing_turn(input: .mouse(MouseEvent(position: pos, type: .released(.left))))
+        #expect(
+            app.window.firstResponder === field,
+            "click must focus TextField (got \(String(describing: app.window.firstResponder.map { type(of: $0) })))"
+        )
+
+        for ch in ["A", "B"] {
+            try await app.testing_turn(
+                input: .key(KeyEvent(character: Character(ch), keycode: 0, modifiers: [], type: .press))
+            )
+        }
+        #expect(box.name == "AB", "typed text must reach Binding (got \(box.name))")
+        #expect(!app.hasPendingCommitWork)
+    }
 }
 
 // MARK: - Helpers
@@ -337,6 +410,16 @@ private func findButtonLabeled(_ label: String, in root: Element?) -> Element? {
     }
     for child in root.children {
         if let found = findButtonLabeled(label, in: child) { return found }
+    }
+    return nil
+}
+
+@MainActor
+private func findTextField(in control: Element?) -> Element? {
+    guard let control else { return nil }
+    if String(describing: type(of: control)).contains("TextField") { return control }
+    for child in control.children {
+        if let found = findTextField(in: child) { return found }
     }
     return nil
 }

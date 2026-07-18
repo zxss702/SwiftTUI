@@ -14,6 +14,14 @@ public final class Application {
     let clock = HostClock()
 
     private var pendingResizeSize: Size?
+
+    /// Coalesced scroll-wheel deltas, applied once per frame in `update()`.
+    /// Handling each wheel event inline on the input pump backed up a burst and
+    /// made a direction reversal replay the queued forward scrolls first.
+    private var pendingScrollDeltaX = 0
+    private var pendingScrollDeltaY = 0
+    private var pendingScrollPosition: Position?
+
     private var isRunning = false
     private var isUpdating = false
     /// `scheduleUpdate` during an open commit → one wake after the commit ends.
@@ -268,6 +276,8 @@ public final class Application {
             || window.layer.invalidated != nil
             || !pendingEditors.isEmpty
             || pendingResizeSize != nil
+            || pendingScrollDeltaX != 0
+            || pendingScrollDeltaY != 0
     }
 
     var swiftDataContext: ModelContext?
@@ -354,9 +364,31 @@ public final class Application {
             transaction.requestPaint()
         case .key(let keyEvent):
             handleKeyInput(keyEvent)
+        case .textInput(let string):
+            handleTextInput(string)
         case .mouse(let mouseEvent):
             handleMouseInput(mouseEvent)
         }
+    }
+
+    /// Bulk insert from coalesced paste / typed burst — one shot to firstResponder.
+    private func handleTextInput(_ string: String) {
+        guard !string.isEmpty else { return }
+        if let presenter = window.popupPresenter,
+           presenter.isPresented,
+           let host = presenter.top?.hostElement
+        {
+            let fr = window.firstResponder
+            let focusInside =
+                fr != nil && (fr === host || fr!.isDescendant(of: host))
+            if focusInside {
+                fr?.handleTextInput(string)
+            } else {
+                host.handleTextInput(string)
+            }
+            return
+        }
+        window.firstResponder?.handleTextInput(string)
     }
 
     func handleKeyInput(_ event: KeyEvent) {
@@ -507,10 +539,31 @@ public final class Application {
             window.mouseCapture = nil
             window.setHoveredElement(hoverTarget(at: pos))
 
-        case .scroll:
-            _ = rootElement.dispatchMouseEvent(event)
+        case .scroll(let deltaX, let deltaY):
+            // Coalesce wheel deltas; the net delta is applied once per frame in
+            // `update()` so a burst (or a direction reversal) does not replay
+            // queued per-event layouts on the input pump.
+            pendingScrollDeltaX += deltaX
+            pendingScrollDeltaY += deltaY
+            pendingScrollPosition = pos
             window.setHoveredElement(hoverTarget(at: pos))
         }
+    }
+
+    /// Dispatch the coalesced scroll delta (if any) as a single event.
+    private func applyPendingScrollIfNeeded() {
+        guard pendingScrollDeltaX != 0 || pendingScrollDeltaY != 0,
+              let pos = pendingScrollPosition
+        else { return }
+        let merged = MouseEvent(
+            position: pos,
+            type: .scroll(deltaX: pendingScrollDeltaX, deltaY: pendingScrollDeltaY)
+        )
+        pendingScrollDeltaX = 0
+        pendingScrollDeltaY = 0
+        pendingScrollPosition = nil
+        _ = rootElement.dispatchMouseEvent(merged)
+        window.setHoveredElement(hoverTarget(at: pos))
     }
 
     /// Hover hit-test: while any presentation is open, only the presented host
@@ -565,6 +618,10 @@ public final class Application {
     }
 
     func update() async throws {
+        // Apply coalesced scroll before layout so this frame reflects the net
+        // wheel movement (reversals cancel queued forward deltas immediately).
+        applyPendingScrollIfNeeded()
+
         if let size = pendingResizeSize {
             pendingResizeSize = nil
             window.layer.frame.size = size

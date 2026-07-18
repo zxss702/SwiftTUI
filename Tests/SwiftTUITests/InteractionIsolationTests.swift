@@ -171,6 +171,73 @@ struct InteractionIsolationTests {
         #expect(box.deleteTaps == 1, "confirm item must fire (deleteTaps=\(box.deleteTaps))")
         #expect(box.rowTaps == 0, "confirm must not fire outer row (rowTaps=\(box.rowTaps))")
     }
+    
+    @Test func lazyHistoryRowHoverMenuAppearsAndClears() async throws {
+        struct Row: Identifiable {
+            let id: Int
+            let title: String
+        }
+        struct Root: View {
+            @State var hovered: Set<Int> = []
+            let rows = (0 ..< 8).map { Row(id: $0, title: "row-\($0)") }
+            var body: some View {
+                ScrollView {
+                    LazyVStack {
+                        ForEach(rows) { row in
+                            Button {} label: {
+                                HStack {
+                                    Text(row.title)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    ZStack(alignment: .trailing) {
+                                        Text("time-\(row.id)")
+                                            .hidden(hovered.contains(row.id))
+                                        Menu {
+                                            Button("confirm-\(row.id)") {}
+                                        } label: {
+                                            Text("delete-\(row.id)")
+                                        }
+                                        .hidden(!hovered.contains(row.id))
+                                    }
+                                }
+                            }
+                            .onHover { isOn in
+                                if isOn {
+                                    hovered.insert(row.id)
+                                } else {
+                                    hovered.remove(row.id)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare(size: Size(width: 40, height: 12))
+
+        let title = try #require(findButtonLabeled("row-2", in: app.testing_rootElement))
+        let pos = center(of: title)
+        try await app.testing_turn(input: .mouse(MouseEvent(position: pos, type: .move)))
+        let delete = try #require(findButtonLabeled("delete-2", in: app.testing_rootElement))
+        #expect(delete.absoluteFrame.size.width > 0, "hover must reveal delete with real frame")
+
+        // Leave the row — trailing control must no longer be the delete Menu.
+        try await app.testing_turn(
+            input: .mouse(MouseEvent(position: Position(column: 0, line: 11), type: .move))
+        )
+        let trailing = Position(
+            column: title.absoluteFrame.position.column + title.absoluteFrame.size.width - 2,
+            line: title.absoluteFrame.position.line
+        )
+        let afterLeave = app.testing_rootElement.pointerGestureTarget(at: trailing)
+        let afterName = afterLeave.map { String(describing: type(of: $0)) } ?? "nil"
+        let afterLabel = afterLeave.flatMap { textLabel(in: $0) }
+        #expect(
+            afterLabel != "delete-2",
+            "leave must hide delete Menu (got \(afterName) label=\(String(describing: afterLabel)))"
+        )
+    }
 
     /// Outside dismiss must not leave the Menu trigger press-armed (would skip
     /// the next open). Anchor presses fall through to toggle.

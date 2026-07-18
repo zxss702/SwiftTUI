@@ -23,11 +23,19 @@
 /// ```
 public enum VTEvent: Equatable, Sendable {
   case key(KeyEvent)
+  /// Coalesced paste / typed burst — insert as one string (not per-character keys).
+  case textInput(String)
   case mouse(MouseEvent)
   case resize(ResizeEvent)
 }
 
 extension VTEvent {
+  /// Collapse mouse moves/scrolls, then merge consecutive insertable keys into
+  /// `.textInput` so paste appears in one paint.
+  package static func coalescingTerminalEvents(_ events: [VTEvent]) -> [VTEvent] {
+    coalescingInsertableKeys(coalescingMouseMoves(events))
+  }
+
   /// Collapse runs of mouse-move events (keep latest) and consecutive scroll
   /// events (sum deltas). Keys, clicks, and resize events are preserved in order.
   package static func coalescingMouseMoves(_ events: [VTEvent]) -> [VTEvent] {
@@ -84,6 +92,57 @@ extension VTEvent {
     flushMove()
     flushScroll()
     return result
+  }
+
+  /// Merge runs of 2+ consecutive insertable `.key` events into `.textInput`.
+  /// Single keys stay as `.key` so normal typing path is unchanged.
+  package static func coalescingInsertableKeys(_ events: [VTEvent]) -> [VTEvent] {
+    guard !events.isEmpty else { return events }
+    var result: [VTEvent] = []
+    result.reserveCapacity(events.count)
+    var pending = ""
+
+    func flushPending() {
+      guard !pending.isEmpty else { return }
+      if pending.count == 1, let char = pending.first {
+        result.append(.key(KeyEvent(character: char, keycode: 0, modifiers: [], type: .press)))
+      } else {
+        result.append(.textInput(pending))
+      }
+      pending = ""
+    }
+
+    for event in events {
+      if case .key(let key) = event, let piece = Self.insertionString(for: key) {
+        pending.append(piece)
+        continue
+      }
+      flushPending()
+      result.append(event)
+    }
+    flushPending()
+    return result
+  }
+
+  /// Text that can be part of a paste / typed burst (not backspace, arrows, Ctrl).
+  package static func insertionString(for key: KeyEvent) -> String? {
+    guard key.type == .press else { return nil }
+    if key.modifiers.contains(.ctrl)
+      || key.modifiers.contains(.alt)
+      || key.modifiers.contains(.meta)
+    {
+      return nil
+    }
+    guard let char = key.character else { return nil }
+    if char == "\u{7F}" || char == "\u{08}" { return nil }
+    if char == "\u{03}" { return nil }
+    if char == "\t" { return "    " }
+    if char == "\r" { return "\n" }
+    if char == "\n" { return "\n" }
+    if char.isASCII && char.isWhitespace && char != " " { return nil }
+    if let ascii = char.asciiValue, ascii < 0x20 { return nil }
+    if char.width == 0, char.isASCII { return nil }
+    return String(char)
   }
 }
 

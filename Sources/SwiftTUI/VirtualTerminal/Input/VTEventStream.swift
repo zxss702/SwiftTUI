@@ -88,7 +88,7 @@ public struct VTEventStream: AsyncSequence, Sendable {
         guard let batch = try await iterator.next() else {
           return nil
         }
-        buffer = VTEvent.coalescingMouseMoves(batch)
+        buffer = VTEvent.coalescingTerminalEvents(batch)
         offset = 0
         // Empty after coalesce (should be rare) — fetch again.
       }

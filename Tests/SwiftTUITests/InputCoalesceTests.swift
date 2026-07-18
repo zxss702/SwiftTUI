@@ -44,4 +44,37 @@ final class InputCoalesceTests: XCTestCase {
         XCTAssertEqual(result.count, 3)
         XCTAssertEqual(result[1], click)
     }
+
+    func testCoalescingInsertableKeysMergesPasteBurst() {
+        let keys: [VTEvent] = "ab".map {
+            .key(KeyEvent(character: $0, keycode: 0, modifiers: [], type: .press))
+        }
+        let result = VTEvent.coalescingTerminalEvents(keys)
+        XCTAssertEqual(result.count, 1)
+        guard case .textInput(let text) = result[0] else {
+            return XCTFail("expected textInput")
+        }
+        XCTAssertEqual(text, "ab")
+    }
+
+    func testSingleKeyStaysKeyEvent() {
+        let key = VTEvent.key(KeyEvent(character: "a", keycode: 0, modifiers: [], type: .press))
+        let result = VTEvent.coalescingTerminalEvents([key])
+        XCTAssertEqual(result.count, 1)
+        guard case .key(let event) = result[0] else {
+            return XCTFail("expected key")
+        }
+        XCTAssertEqual(event.character, "a")
+    }
+
+    func testBackspaceDoesNotMergeWithInsertableKeys() {
+        let a = VTEvent.key(KeyEvent(character: "a", keycode: 0, modifiers: [], type: .press))
+        let del = VTEvent.key(KeyEvent(character: "\u{7F}", keycode: 0, modifiers: [], type: .press))
+        let b = VTEvent.key(KeyEvent(character: "b", keycode: 0, modifiers: [], type: .press))
+        let result = VTEvent.coalescingTerminalEvents([a, del, b])
+        XCTAssertEqual(result.count, 3)
+        guard case .key = result[0], case .key = result[1], case .key = result[2] else {
+            return XCTFail("expected three key events")
+        }
+    }
 }

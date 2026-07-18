@@ -133,10 +133,12 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
             case .top: return 0
             case .bottom:
                 guard container != .infinity, child != .infinity else { return 0 }
-                return container - child
+                // Clamp: an oversized child clips at the leading edge, never
+                // shifts negatively off the trailing side.
+                return max(0, container - child)
             case .center:
                 guard container != .infinity, child != .infinity else { return 0 }
-                return (container - child) / 2
+                return max(0, (container - child) / 2)
             }
         }
 
@@ -149,10 +151,12 @@ private struct FlexibleFrame<Content: View>: View, PrimitiveView, ModifierView {
             case .leading: return 0
             case .trailing:
                 guard container != .infinity, child != .infinity else { return 0 }
-                return container - child
+                // Clamp: an oversized child clips at the leading edge, never
+                // shifts negatively off the trailing side.
+                return max(0, container - child)
             case .center:
                 guard container != .infinity, child != .infinity else { return 0 }
-                return (container - child) / 2
+                return max(0, (container - child) / 2)
             }
         }
     }

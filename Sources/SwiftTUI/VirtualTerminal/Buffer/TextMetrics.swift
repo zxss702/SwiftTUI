@@ -121,6 +121,20 @@ extension Character {
     if isASCII { return isWhitespace ? (self == " " ? 1 : 0) : 1 }
 
     let scalars = unicodeScalars
+
+    // Single-scalar fast path (the vast majority of CJK / Latin text): emoji
+    // sequence detection (ZWJ / VS16 / keycap / flag / skin-tone) all require
+    // multiple scalars, so a lone scalar's own width is authoritative. This
+    // skips the `Array(unicodeScalars)` allocation + range scans in
+    // `hasEmojiTerminalWidth` for every character during wrapping.
+    var iterator = scalars.makeIterator()
+    guard let first = iterator.next() else { return 1 }
+    if iterator.next() == nil, !first.isEmojiFormatScalar {
+      // Lone emoji-format scalars (skin tone / VS16 / ZWJ) keep the full
+      // cluster logic below; everything else uses its own scalar width.
+      return first.width
+    }
+
     if scalars.allSatisfy(\.isZeroWidth) { return 0 }
 
     // Emoji presentation / ZWJ / keycap / flag clusters → always 2 cells.

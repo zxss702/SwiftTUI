@@ -227,10 +227,10 @@ import Foundation
 
             // Fallback: if walker produced nothing but we have children, treat all as cells.
             if itemKinds.isEmpty {
-                itemKinds = Array(repeating: .cell, count: totalChildrenSize)
-            } else if itemKinds.count != totalChildrenSize {
-                // Size mismatch (e.g. mid-update) — fall back to all cells.
-                itemKinds = Array(repeating: .cell, count: totalChildrenSize)
+                itemKinds = Array(repeating: .cell, count: max(totalChildrenSize, 0))
+            } else {
+                // 以 walker 为准：惰性 ForEach 的 Node.size 在展开前可能与扁平控件数不一致。
+                totalChildrenSize = itemKinds.count
             }
 
             buildSectionsFromKinds()
@@ -246,6 +246,15 @@ import Foundation
                 appendChromeKinds(from: node.children[0], role: .header, into: &kinds)
                 collectKinds(from: node.children[1], into: &kinds)
                 appendChromeKinds(from: node.children[2], role: .footer, into: &kinds)
+                return
+            }
+
+            // 惰性 ForEach：children 为空，按 data 槽位 ensure 后递归（展开 Section 等）。
+            if let source = node.view as? ContiguousChildSource {
+                let slots = source.dataCount(node: node)
+                for i in 0 ..< slots {
+                    collectKinds(from: source.childNode(node: node, at: i), into: &kinds)
+                }
                 return
             }
 

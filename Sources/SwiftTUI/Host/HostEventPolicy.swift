@@ -13,7 +13,7 @@ enum HostEventPolicy {
     /// Whether this event should wake the frame loop after handling.
     static func shouldWakeFrameLoop(_ event: VTEvent) -> Bool {
         switch event {
-        case .key, .resize:
+        case .key, .textInput, .resize:
             return true
         case .mouse(let mouse):
             switch mouse.type {
