@@ -36,6 +36,68 @@ struct ScrollViewReaderTests {
         )
     }
 
+    @Test func scrollToLastMaterializedIdentityAlignsBottomOnScrollViewAppear() async throws {
+        struct Root: View {
+            var body: some View {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(0 ..< 30, id: \.self) { i in
+                                Text("row-\(i)").id(i)
+                            }
+                        }
+                    }
+                    .frame(height: 5)
+                    .onAppear { proxy.scrollTo(29, anchor: .bottom) }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare(size: Size(width: 40, height: 12))
+
+        let scroll = try #require(findScroll(in: app.testing_rootElement))
+        let target = try #require(findText(in: app.testing_rootElement, equalTo: "row-29"))
+        let vp = scroll.absoluteFrame
+        let frame = target.absoluteFrame
+        #expect(vp.contains(frame.position), "target should be in viewport; vp=\(vp) frame=\(frame)")
+        #expect(
+            frame.position.line + frame.size.height == vp.position.line + vp.size.height,
+            "anchor .bottom should pin target bottom to viewport bottom; target=\(frame) vp=\(vp)"
+        )
+    }
+
+    @Test func scrollToLastMaterializedIdentityAlignsBottomOnContentAppear() async throws {
+        struct Root: View {
+            var body: some View {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(0 ..< 30, id: \.self) { i in
+                                Text("row-\(i)").id(i)
+                            }
+                        }
+                        .onAppear { proxy.scrollTo(29, anchor: .bottom) }
+                    }
+                    .frame(height: 5)
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare(size: Size(width: 40, height: 12))
+
+        let scroll = try #require(findScroll(in: app.testing_rootElement))
+        let target = try #require(findText(in: app.testing_rootElement, equalTo: "row-29"))
+        let vp = scroll.absoluteFrame
+        let frame = target.absoluteFrame
+        #expect(vp.contains(frame.position), "target should be in viewport; vp=\(vp) frame=\(frame)")
+        #expect(
+            frame.position.line + frame.size.height == vp.position.line + vp.size.height,
+            "anchor .bottom should pin target bottom to viewport bottom; target=\(frame) vp=\(vp)"
+        )
+    }
+
     @Test func scrollToLazyOffscreenIdentity() async throws {
         struct Root: View {
             var body: some View {
@@ -62,6 +124,37 @@ struct ScrollViewReaderTests {
         #expect(
             vp.intersects(target.absoluteFrame),
             "lazy off-screen id must materialize into viewport; vp=\(vp) frame=\(target.absoluteFrame)"
+        )
+    }
+
+    @Test func scrollToLastLazyIdentityAlignsBottomOnScrollViewAppear() async throws {
+        struct Root: View {
+            var body: some View {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 0, estimatedItemHeight: 1) {
+                            ForEach(0 ..< 50, id: \.self) { i in
+                                Text("lazy-\(i)").id(i)
+                            }
+                        }
+                    }
+                    .frame(height: 6)
+                    .onAppear { proxy.scrollTo(49, anchor: .bottom) }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare(size: Size(width: 40, height: 12))
+
+        let scroll = try #require(findScroll(in: app.testing_rootElement))
+        let target = try #require(findText(in: app.testing_rootElement, equalTo: "lazy-49"))
+        let vp = scroll.absoluteFrame
+        let frame = target.absoluteFrame
+        #expect(vp.contains(frame.position), "target should be in viewport; vp=\(vp) frame=\(frame)")
+        #expect(
+            frame.position.line + frame.size.height == vp.position.line + vp.size.height,
+            "anchor .bottom should pin target bottom to viewport bottom; target=\(frame) vp=\(vp)"
         )
     }
 
