@@ -435,29 +435,75 @@ public enum TextLayout {
         guard !units.isEmpty else { return [LaidOutLine(units: [])] }
 
         var lines: [LaidOutLine] = []
-        var current: [LaidOutLine.Unit] = []
-        var currentWidth = 0
+        var lineStart = 0
+        var lineWidth = 0
+        var lastBreakOpportunity: Int?
 
-        for unit in units {
-            if unit.char == "\n" {
-                lines.append(LaidOutLine(units: current))
-                current = []
-                currentWidth = 0
+        func unitWidth(_ unit: LaidOutLine.Unit) -> Int {
+            let w = unit.char.width
+            if w <= 0 { return unit.char == "\t" ? 1 : 0 }
+            return w
+        }
+
+        func flushLine(upTo end: Int) {
+            lines.append(LaidOutLine(units: Array(units[lineStart ..< end])))
+            lineStart = end
+            lineWidth = 0
+            lastBreakOpportunity = nil
+        }
+
+        func skipLeadingSpaces(_ index: inout Int) {
+            while index < units.count, units[index].char == " " {
+                index += 1
+                lineStart = index
+            }
+        }
+
+        func recomputeLineWidth(upTo end: Int) {
+            lineWidth = units[lineStart ..< end].reduce(0) { $0 + unitWidth($1) }
+        }
+
+        var index = 0
+        while index < units.count {
+            let unit = units[index]
+
+            if LineBreakEngine.isMandatoryBreak(unit.char) || unit.char == "\n" {
+                flushLine(upTo: index)
+                index += 1
+                lineStart = index
                 continue
             }
 
-            let charWidth = unit.char.width
-            if currentWidth + charWidth > width, !current.isEmpty {
-                lines.append(LaidOutLine(units: current))
-                current = [unit]
-                currentWidth = charWidth
-            } else {
-                current.append(unit)
-                currentWidth += charWidth
+            let charWidth = unitWidth(unit)
+            if lineWidth + charWidth > width, index > lineStart {
+                let breakAt = LineBreakEngine.chooseBreakPoint(
+                    units: units,
+                    lineStart: lineStart,
+                    exclusiveEnd: index,
+                    lastOpportunity: lastBreakOpportunity
+                )
+                flushLine(upTo: breakAt)
+                skipLeadingSpaces(&index)
+                recomputeLineWidth(upTo: index)
+                continue
             }
+
+            lineWidth += charWidth
+            if index + 1 < units.count {
+                let next = units[index + 1].char
+                if LineBreakEngine.canBreak(after: unit.char, before: next) {
+                    lastBreakOpportunity = index
+                }
+            }
+            index += 1
         }
-        lines.append(LaidOutLine(units: current))
-        return lines
+
+        if lineStart < units.count {
+            lines.append(LaidOutLine(units: Array(units[lineStart...])))
+        } else if !units.isEmpty {
+            lines.append(LaidOutLine(units: []))
+        }
+        return lines.isEmpty ? [LaidOutLine(units: [])] : lines
     }
 
     private static func truncateTail(

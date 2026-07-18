@@ -332,41 +332,37 @@ private final class TextEditorElement: Element {
         visualLines.removeAll(keepingCapacity: true)
         lineRanges.removeAll(keepingCapacity: true)
 
-        var currentIndex = cachedText.startIndex
-        var currentVisualLine = ""
-        var currentVisualLineStart = currentIndex
-        var currentWidth = 0
+        let units: [TextLayout.LaidOutLine.Unit] = cachedText.enumerated().map {
+            TextLayout.LaidOutLine.Unit(char: $0.element, sourceIndex: $0.offset)
+        }
+        let lines = TextLayout.wrap(units, width: max(width, 1))
 
-        while currentIndex < cachedText.endIndex {
-            let char = cachedText[currentIndex]
-            let charWidth = char.width
+        var searchStart = cachedText.startIndex
+        for line in lines {
+            visualLines.append(line.string)
 
-            if char == "\n" {
-                let nextIndex = cachedText.index(after: currentIndex)
-                visualLines.append(currentVisualLine)
-                lineRanges.append(currentVisualLineStart ..< nextIndex)
-                currentIndex = nextIndex
-                currentVisualLine = ""
-                currentVisualLineStart = currentIndex
-                currentWidth = 0
+            if line.units.isEmpty {
+                if searchStart < cachedText.endIndex, cachedText[searchStart] == "\n" {
+                    let end = cachedText.index(after: searchStart)
+                    lineRanges.append(searchStart ..< end)
+                    searchStart = end
+                } else {
+                    lineRanges.append(searchStart ..< searchStart)
+                }
                 continue
             }
 
-            if width > 0 && currentWidth + charWidth > width {
-                visualLines.append(currentVisualLine)
-                lineRanges.append(currentVisualLineStart ..< currentIndex)
-                currentVisualLine = ""
-                currentVisualLineStart = currentIndex
-                currentWidth = 0
+            let firstOffset = line.units.compactMap(\.sourceIndex).min()!
+            let lastOffset = line.units.compactMap(\.sourceIndex).max()!
+            let rangeStart = cachedText.index(cachedText.startIndex, offsetBy: firstOffset)
+            var rangeEnd = cachedText.index(cachedText.startIndex, offsetBy: lastOffset + 1)
+            if rangeEnd < cachedText.endIndex, cachedText[rangeEnd] == "\n" {
+                rangeEnd = cachedText.index(after: rangeEnd)
             }
-
-            currentVisualLine.append(char)
-            currentWidth += charWidth
-            currentIndex = cachedText.index(after: currentIndex)
+            lineRanges.append(rangeStart ..< rangeEnd)
+            searchStart = rangeEnd
         }
 
-        visualLines.append(currentVisualLine)
-        lineRanges.append(currentVisualLineStart ..< currentIndex)
         needsRebuild = false
         lastBuiltWidth = width
     }
