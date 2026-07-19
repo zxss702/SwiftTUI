@@ -63,10 +63,26 @@ extension EnvironmentValues {
     }
 }
 
+private struct TextEditorPromptEnvironmentKey: EnvironmentKey {
+    static var defaultValue: String? { nil }
+}
+
+extension EnvironmentValues {
+    var textEditorPrompt: String? {
+        get { self[TextEditorPromptEnvironmentKey.self] }
+        set { self[TextEditorPromptEnvironmentKey.self] = newValue }
+    }
+}
+
 public extension View {
     func textEditorStyle<S: TextEditorStyle>(_ style: S) -> some View {
         let kind = (style as? any _TextEditorStyleResolvable)?.textEditorStyleKind ?? .automatic
         return environment(\.textEditorStyleKind, kind)
+    }
+
+    /// 在 TextEditor 左侧显示固定提示前缀（例如 shell 风格的 `folder>`）。
+    func textEditorPrompt(_ prompt: String) -> some View {
+        environment(\.textEditorPrompt, prompt)
     }
 }
 
@@ -78,6 +94,7 @@ public struct TextEditor: View {
     @Binding var text: String
     @Environment(\.textEditorStyleKind) private var styleKind
     @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.textEditorPrompt) private var prompt
 
     public init(text: Binding<String>) {
         self._text = text
@@ -85,12 +102,23 @@ public struct TextEditor: View {
 
     public var body: some View {
         let core = TextEditorCore(text: $text, isEnabled: isEnabled)
-        switch styleKind {
-        case .roundedBorder:
-            // macOS roundedBorder：圆角边框
-            core.border(style: .rounded)
-        case .automatic, .plain:
-            core
+        let editor: AnyView = {
+            switch styleKind {
+            case .roundedBorder:
+                // macOS roundedBorder：圆角边框
+                return AnyView(core.border(style: .rounded))
+            case .automatic, .plain:
+                return AnyView(core)
+            }
+        }()
+
+        if let prompt, !prompt.isEmpty {
+            HStack(spacing: 0) {
+                Text(prompt)
+                editor
+            }
+        } else {
+            editor
         }
     }
 }
