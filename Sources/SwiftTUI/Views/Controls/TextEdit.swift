@@ -63,17 +63,6 @@ extension EnvironmentValues {
     }
 }
 
-private struct TextEditorPromptEnvironmentKey: EnvironmentKey {
-    static var defaultValue: String? { nil }
-}
-
-extension EnvironmentValues {
-    var textEditorPrompt: String? {
-        get { self[TextEditorPromptEnvironmentKey.self] }
-        set { self[TextEditorPromptEnvironmentKey.self] = newValue }
-    }
-}
-
 public extension View {
     func textEditorStyle<S: TextEditorStyle>(_ style: S) -> some View {
         let kind = (style as? any _TextEditorStyleResolvable)?.textEditorStyleKind ?? .automatic
