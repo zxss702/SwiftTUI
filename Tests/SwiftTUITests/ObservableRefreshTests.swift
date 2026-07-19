@@ -324,6 +324,78 @@ struct ObservableRefreshTests {
             "shorter label must shrink trigger again"
         )
     }
+
+    /// Same display width under LazyVStack: model `text` must paint new glyphs
+    /// without a window resize (LazyVStack skips layout when size is unchanged).
+    @Test func menuPickerSameWidthLabelPaintsWithoutResize() async throws {
+        let session = Session()
+        session.info = "aaaa"
+
+        struct Root: View {
+            @Bindable var session: Session
+            var body: some View {
+                NavigationStack {
+                    ScrollView {
+                        LazyVStack(spacing: 1) {
+                            HStack {
+                                Text("梦想家")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                Picker("", selection: Binding(
+                                    get: { session.info },
+                                    set: { session.info = $0 }
+                                )) {
+                                    Text("aaaa").tag("aaaa")
+                                    Text("bbbb").tag("bbbb")
+                                }
+                                .labelsHidden()
+                            }
+                        }
+                    }
+                    .navigationTitle("设置")
+                }
+            }
+        }
+
+        let app = Application(rootView: Root(session: session))
+        try await app.testing_prepare(size: Size(width: 50, height: 12))
+
+        let before = try #require(findButtonContaining(in: app.testing_rootElement, text: "aaaa"))
+        let beforeWidth = before.absoluteFrame.size.width
+        #expect(paintedWindow(app).contains("aaaa"))
+
+        // Menu pick (same path as Settings) — equal display width.
+        try await click(before, on: app)
+        let option = try #require(findButtonLabeled("bbbb", in: app.testing_rootElement))
+        try await click(option, on: app)
+        try await app.testing_drainUntilIdle()
+
+        #expect(session.info == "bbbb")
+        let after = try #require(findButtonContaining(in: app.testing_rootElement, text: "bbbb"))
+        #expect(
+            after.absoluteFrame.size.width == beforeWidth,
+            "same-width labels must keep trigger width (covers LazyVStack skip-layout)"
+        )
+
+        let screen = paintedWindow(app)
+        #expect(screen.contains("bbbb"), "framebuffer must show new label without resize")
+        #expect(!screen.contains("aaaa"), "framebuffer must not keep stale picker glyphs")
+    }
+}
+
+@MainActor
+private func paintedWindow(_ app: Application) -> String {
+    var buffer = ScreenBuffer(rect: Rect(position: .zero, size: app.window.layer.frame.size))
+    app.window.layer.draw(into: &buffer)
+    let size = app.window.layer.frame.size
+    var rows: [String] = []
+    for line in 0 ..< size.height.intValue {
+        var row = ""
+        for col in 0 ..< size.width.intValue {
+            row.append(buffer.character(at: Position(column: Extended(col), line: Extended(line))) ?? " ")
+        }
+        rows.append(row)
+    }
+    return rows.joined(separator: "\n")
 }
 
 @MainActor

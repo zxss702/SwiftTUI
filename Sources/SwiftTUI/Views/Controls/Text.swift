@@ -60,14 +60,15 @@ import Foundation
         control.strikethrough = strikethrough
         control.lineLimit = lineLimit
         control.truncationMode = truncationMode
-        // Measurement-affecting changes must always relayout. Probing with the
-        // *current* frame width is wrong: a longer string measured in a stale
-        // narrow frame can report the same width (clipped) and skip layout,
-        // leaving Picker/Menu labels stuck until the window is resized.
+        // Measurement-affecting changes must always relayout. Also rebuild
+        // `cachedLines` here: LazyVStack skips child `layout` when measured size
+        // is unchanged, so paint would otherwise keep drawing stale glyphs until
+        // a window resize forces a full-tree layout.
         if previousText != control.text
             || previousLineLimit != lineLimit
             || previousTruncation != truncationMode
         {
+            control.refreshDrawCacheForCurrentFrame()
             control.invalidateSizeCacheUpward()
             node.root.application?.requestLayout()
         }
@@ -110,17 +111,33 @@ import Foundation
         private var lineCache: [Int: [TextLayout.LaidOutLine]] = [:]
         private var cachedIntrinsicWidth: Int?
 
-        private func ensureCacheFresh() {
-            let signature = LineCacheSignature(
+        private func currentLineSignature() -> LineCacheSignature {
+            LineCacheSignature(
                 text: text,
                 lineLimit: lineLimit,
                 truncationMode: truncationMode
             )
+        }
+
+        private func ensureCacheFresh() {
+            let signature = currentLineSignature()
             if lineCacheSignature != signature {
                 lineCacheSignature = signature
                 lineCache.removeAll(keepingCapacity: true)
                 cachedIntrinsicWidth = nil
             }
+        }
+
+        /// Drop wrap caches and rebuild `cachedLines` for the current frame so
+        /// `draw` is correct even when a parent skips `layout` (same measured size).
+        func refreshDrawCacheForCurrentFrame() {
+            lineCacheSignature = nil
+            lineCache.removeAll(keepingCapacity: true)
+            cachedIntrinsicWidth = nil
+            cachedLines = []
+            let width = layer.frame.size.width.intValue
+            guard width > 0 else { return }
+            cachedLines = laidOutLines(width: width)
         }
 
         private func laidOutLines(width: Int) -> [TextLayout.LaidOutLine] {
@@ -231,6 +248,10 @@ import Foundation
         override func draw(into buffer: inout ScreenBuffer) {
             let maxWidth = layer.frame.size.width.intValue
             let maxHeight = layer.frame.size.height.intValue
+            // Defensive: content can change without a layout pass (LazyVStack).
+            if maxWidth > 0, lineCacheSignature != currentLineSignature() {
+                refreshDrawCacheForCurrentFrame()
+            }
             let envAttributes = CellAttributes(
                 bold: bold,
                 italic: italic,
