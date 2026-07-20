@@ -1,4 +1,7 @@
 import Foundation
+#if os(Windows)
+import WinSDK
+#endif
 
 /// Application host: input commits on the reader task; frame wakes are coalesced.
 @MainActor
@@ -760,11 +763,9 @@ public final class Application {
 
     private func stop() {
         isRunning = false
-        #if !os(Windows)
-        // Kick any parked stdin reader so the next Application.start() is not
-        // racing History’s terminal for TTY bytes.
+        // Kick any parked stdin/console reader so the next Application.start()
+        // is not racing the previous session for input events.
         _ = StdinReaderGate.claim()
-        #endif
         clock.cancelAll()
         scheduler.finish()
         // Discard tty bytes already queued (e.g. the click's release after
@@ -775,7 +776,11 @@ public final class Application {
     /// Non-blocking drain of stdin so a sequential `Application.start()` does
     /// not inherit stale press/release bytes from the previous session.
     nonisolated private static func drainPendingStdin() {
-        #if !os(Windows)
+        #if os(Windows)
+        let handle = GetStdHandle(STD_INPUT_HANDLE)
+        guard handle != INVALID_HANDLE_VALUE else { return }
+        _ = FlushConsoleInputBuffer(handle)
+        #else
         let fd = STDIN_FILENO
         let flags = fcntl(fd, F_GETFL)
         guard flags >= 0 else { return }

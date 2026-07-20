@@ -204,12 +204,25 @@ internal final actor WindowsTerminal: VTTerminal {
       throw WindowsError()
     }
 
-    // See POSIXTerminal: never drop key/click batches under mouse-move flood.
+    // Unbounded: see POSIXTerminal — never drop key/click batches under mouse flood.
+    // Claim stdin so a prior session's reader exits (wait timeout wakes) instead of
+    // stealing every-other event from this Application (History → Chat reboot pattern).
+    let stdinGeneration = StdinReaderGate.claim()
+
     self.input = VTEventStream(AsyncThrowingStream(bufferingPolicy: .unbounded) { [hIn, hOut] continuation in
-      Task {
-        repeat {
+      let reader = Task {
+        while !Task.isCancelled && StdinReaderGate.owns(stdinGeneration) {
           do {
-            guard WaitForSingleObject(hIn.handle, INFINITE) == WAIT_OBJECT_0 else {
+            // Timed wait so cancel / generation bump can stop a stuck reader
+            // without consuming the next key/click that belongs to the new session.
+            let wait = WaitForSingleObject(hIn.handle, 50)
+            if Task.isCancelled || !StdinReaderGate.owns(stdinGeneration) {
+              break
+            }
+            if wait == WAIT_TIMEOUT {
+              continue
+            }
+            guard wait == WAIT_OBJECT_0 else {
               throw WindowsError()
             }
 
@@ -218,6 +231,9 @@ internal final actor WindowsTerminal: VTTerminal {
               throw WindowsError()
             }
             guard cNumberOfEvents > 0 else { continue }
+            // Re-check before ReadConsoleInputW — otherwise a superseded reader
+            // steals the batch that just arrived for the live session.
+            guard StdinReaderGate.owns(stdinGeneration) else { break }
 
             let events = try Array<INPUT_RECORD>(unsafeUninitializedCapacity: Int(cNumberOfEvents)) {
               var NumberOfEventsRead: DWORD = 0
@@ -226,37 +242,47 @@ internal final actor WindowsTerminal: VTTerminal {
               }
               $1 = Int(NumberOfEventsRead)
             }
-            .compactMap { record -> VTEvent? in
+            .flatMap { record -> [VTEvent] in
               switch record.EventType {
               case KEY_EVENT:
-                guard record.Event.KeyEvent.bKeyDown == true else { return nil }
-                return VTEvent.key(.from(record.Event.KeyEvent))
+                guard record.Event.KeyEvent.bKeyDown == true else { return [] }
+                let key = VTEvent.key(.from(record.Event.KeyEvent))
+                // Windows merges auto-repeat into wRepeatCount; expand so long
+                // press (arrows/backspace) advances once per repeat tick.
+                let repeatCount = max(1, Int(record.Event.KeyEvent.wRepeatCount))
+                return Array(repeating: key, count: repeatCount)
               case MOUSE_EVENT:
-                return VTEvent.mouse(.from(record.Event.MouseEvent))
+                return [VTEvent.mouse(.from(record.Event.MouseEvent))]
               case WINDOW_BUFFER_SIZE_EVENT:
                 var csbi = CONSOLE_SCREEN_BUFFER_INFO()
                 guard GetConsoleScreenBufferInfo(hOut.handle, &csbi) else {
-                  return VTEvent.resize(.from(record.Event.WindowBufferSizeEvent))
+                  return [VTEvent.resize(.from(record.Event.WindowBufferSizeEvent))]
                 }
                 let windowSize = Size(
                   width: Int(csbi.srWindow.Right - csbi.srWindow.Left + 1),
                   height: Int(csbi.srWindow.Bottom - csbi.srWindow.Top + 1)
                 )
-                return VTEvent.resize(ResizeEvent(size: windowSize))
+                return [VTEvent.resize(ResizeEvent(size: windowSize))]
               default:
-                return nil
+                return []
               }
             }
 
+            guard StdinReaderGate.owns(stdinGeneration) else { break }
             let coalesced = VTEvent.coalescingTerminalEvents(events)
             if !coalesced.isEmpty {
               continuation.yield(coalesced)
             }
           } catch {
             continuation.finish(throwing: error)
+            return
           }
-        } while !Task.isCancelled
+        }
         continuation.finish()
+      }
+
+      continuation.onTermination = { @Sendable _ in
+        reader.cancel()
       }
     })
   }
