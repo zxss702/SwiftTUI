@@ -69,16 +69,34 @@ struct ScreenBuffer {
             blankRaw(at: Position(column: position.column - 1, line: position.line))
         }
 
-        writeRaw(cell, at: position)
         if cw > 1 {
-            var cont = cell
-            cont.char = "\u{0000}"
-            for w in 1 ..< cw {
-                writeRaw(
-                    cont,
-                    at: Position(column: position.column + Extended(w), line: position.line)
-                )
+            // A wide char must land with *all* its cells inside the clip. A
+            // half-clipped glyph would either leave an orphan continuation
+            // (lead clipped → terminal column never repainted, stale glyph
+            // stays) or overflow the clip visually (continuation clipped).
+            // Draw spaces into the writable cells instead.
+            let fullyWritable = (0 ..< cw).allSatisfy {
+                isWritable(at: Position(column: position.column + Extended($0), line: position.line))
             }
+            if fullyWritable {
+                writeRaw(cell, at: position)
+                var cont = cell
+                cont.char = "\u{0000}"
+                for w in 1 ..< cw {
+                    writeRaw(
+                        cont,
+                        at: Position(column: position.column + Extended(w), line: position.line)
+                    )
+                }
+            } else {
+                var space = cell
+                space.char = " "
+                for w in 0 ..< cw {
+                    writeRaw(space, at: Position(column: position.column + Extended(w), line: position.line))
+                }
+            }
+        } else {
+            writeRaw(cell, at: position)
         }
         // The cell after this write may be an orphaned continuation (its lead
         // was just overwritten). Blank it, keeping the lower layer's style so
@@ -112,6 +130,16 @@ struct ScreenBuffer {
             cells[index] = cell
             self.cells = cells
         }
+    }
+
+    /// Whether a write at `position` would pass the clip and bounds checks.
+    private func isWritable(at position: Position) -> Bool {
+        let finalPos = position + translation
+        guard clipRect.contains(finalPos) else { return false }
+        let localPos = finalPos - rect.position
+        return localPos.x >= 0 && localPos.y >= 0
+            && localPos.x < rect.size.width.intValue
+            && localPos.y < rect.size.height.intValue
     }
 
     /// Single-column store without grapheme expansion (internal / continuation).

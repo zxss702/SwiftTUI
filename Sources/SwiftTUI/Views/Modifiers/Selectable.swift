@@ -363,13 +363,29 @@ extension SelectableElement: SelectionOwner {
     /// Region-local frames of `.selectionDisabled()` subtrees currently mounted
     /// under this region. Walked on demand: masked rows inside lazy containers
     /// mount/unmount with scrolling, so a cached list would go stale.
+    ///
+    /// The masked band spans the **full height of its immediate container**
+    /// (row): a line-number gutter is one line tall, but its code row may
+    /// soft-wrap to several lines — the continuation lines' gutter columns
+    /// must not become selectable.
     private func collectMaskedRects() -> [Rect] {
         var rects: [Rect] = []
         let regionOrigin = absoluteFrame.position
         func walk(_ element: Element) {
             if let mask = element as? SelectionMaskElement, mask.isSelectionDisabled {
                 let frame = mask.absoluteFrame
-                rects.append(Rect(position: frame.position - regionOrigin, size: frame.size))
+                var local = Rect(position: frame.position - regionOrigin, size: frame.size)
+                if let row = mask.parent {
+                    let rowFrame = row.absoluteFrame
+                    local = Rect(
+                        position: Position(
+                            column: local.position.column,
+                            line: rowFrame.position.line - regionOrigin.line
+                        ),
+                        size: Size(width: local.size.width, height: rowFrame.size.height)
+                    )
+                }
+                rects.append(local)
                 return
             }
             for child in element.children {

@@ -84,6 +84,31 @@ struct VTWideCharPositionTests {
         )
     }
 
+    /// A wide char half-outside the clip must not be drawn as a torn glyph or
+    /// orphan continuation — the writable half becomes a space.
+    @Test func screenBufferClippedWideCharDrawsSpacesNotOrphans() {
+        var buffer = ScreenBuffer(
+            rect: Rect(position: .zero, size: Size(width: 4, height: 1))
+        )
+        // Clip to columns 1...2 only.
+        buffer.clip(to: Rect(position: Position(column: 1, line: 0), size: Size(width: 2, height: 1)))
+
+        // Lead at column 0 is outside the clip; continuation at 1 is inside.
+        buffer.setCell(Cell(char: "中"), at: Position(column: 0, line: 0))
+        #expect(buffer.character(at: Position(column: 0, line: 0)) == nil, "outside clip")
+        #expect(
+            buffer.character(at: Position(column: 1, line: 0)) == Character(" "),
+            "clipped wide char must paint a space, not an orphan continuation"
+        )
+
+        // Lead at column 2 is inside; continuation at 3 is outside.
+        buffer.setCell(Cell(char: "文"), at: Position(column: 2, line: 0))
+        #expect(
+            buffer.character(at: Position(column: 2, line: 0)) == Character(" "),
+            "wide char overflowing the clip must not draw its lead"
+        )
+    }
+
     /// Integration: a sheet presented over full-width CJK rows (half the rows
     /// shifted by one column so both column parities straddle the panel edge).
     /// The rounded-border rectangle must stay perfectly aligned — the old

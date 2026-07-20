@@ -92,6 +92,56 @@ struct SelectionDisabledTests {
         )
     }
 
+    /// Soft-wrapped row: the gutter is one line tall but the row spans two
+    /// lines. The masked band must cover the gutter columns on *all* the
+    /// row's lines, so the continuation line has no selectable stub sticking
+    /// out on the left (CodeDiffView wrapped diff lines).
+    @Test func maskCoversGutterColumnsOnWrappedRowLines() async throws {
+        struct Root: View {
+            var body: some View {
+                HStack(alignment: .top, spacing: 0) {
+                    Text("42 ").selectionDisabled()
+                    Text("line-a\nline-b")
+                }
+                .selectable()
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare(size: Size(width: 30, height: 4))
+        let selectable = try #require(
+            findMaskTestElement(in: app.testing_rootElement, typeContains: "SelectableElement") as? SelectableElement
+        )
+        let origin = selectable.absoluteFrame.position
+
+        // Select both lines fully, starting at the gutter of line 0.
+        try await drag(app, from: origin, to: origin + Position(column: 8, line: 1))
+        #expect(selectable.hasSelection)
+
+        let text = try #require(selectable.selectedText())
+        #expect(
+            text == "line-a\nline-b",
+            "wrapped line's gutter columns must not be copied, got \(text.debugDescription)"
+        )
+
+        var buffer = ScreenBuffer(rect: Rect(position: .zero, size: app.window.layer.frame.size))
+        app.window.layer.draw(into: &buffer)
+        app.window.selectionCoordinator.applyHighlight(into: &buffer)
+
+        for line in 0 ... 1 {
+            let gutterCell = try #require(buffer.cell(at: origin + Position(column: 0, line: Extended(line))))
+            #expect(
+                gutterCell.backgroundColor != TextSelectionStyle.background,
+                "line \(line): gutter column must not be highlighted"
+            )
+        }
+        let codeCell = try #require(buffer.cell(at: origin + Position(column: 3, line: 1)))
+        #expect(
+            codeCell.backgroundColor == TextSelectionStyle.background,
+            "second line content must be highlighted"
+        )
+    }
+
     /// `selectionDisabled(false)` is a no-op: the area stays selectable.
     @Test func selectionDisabledFalseKeepsAreaSelectable() async throws {
         struct Root: View {
