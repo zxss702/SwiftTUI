@@ -387,30 +387,33 @@ struct StyledChar: Equatable {
 
 @available(macOS 12, *)
 enum AttributedTextStyle {
+    // Avoid `AttributedString.runs` on Windows: debug builds emit unresolved
+    // `_FoundationCollections.BigString.Index` metadata (swiftlang/swift#88132).
     static func flatten(_ attributed: AttributedString) -> (string: String, styles: [StyledChar]?) {
         let string = String(attributed.characters)
         guard !string.isEmpty else { return (string, []) }
 
         var styles: [StyledChar] = []
-        styles.reserveCapacity(attributed.characters.count)
+        styles.reserveCapacity(string.count)
 
-        for run in attributed.runs {
-            typealias Attr = AttributeScopes.SwiftTUIAttributes
-            let attrs = run.attributes
-            let style = StyledChar(
-                foreground: attrs[Attr.ForegroundColorAttribute.self],
-                background: attrs[Attr.BackgroundColorAttribute.self],
-                bold: attrs[Attr.BoldAttribute.self],
-                italic: attrs[Attr.ItalicAttribute.self],
-                underline: attrs[Attr.UnderlineAttribute.self],
-                strikethrough: attrs[Attr.StrikethroughAttribute.self],
-                inverted: attrs[Attr.InvertedAttribute.self],
-                linkURL: attrs[Attr.LinkURLAttribute.self]
+        typealias Attr = AttributeScopes.SwiftTUIAttributes
+        var index = attributed.startIndex
+        while index < attributed.endIndex {
+            let next = attributed.index(afterCharacter: index)
+            let slice = attributed[index..<next]
+            styles.append(
+                StyledChar(
+                    foreground: slice[Attr.ForegroundColorAttribute.self],
+                    background: slice[Attr.BackgroundColorAttribute.self],
+                    bold: slice[Attr.BoldAttribute.self],
+                    italic: slice[Attr.ItalicAttribute.self],
+                    underline: slice[Attr.UnderlineAttribute.self],
+                    strikethrough: slice[Attr.StrikethroughAttribute.self],
+                    inverted: slice[Attr.InvertedAttribute.self],
+                    linkURL: slice[Attr.LinkURLAttribute.self]
+                )
             )
-            let count = attributed[run.range].characters.count
-            for _ in 0 ..< count {
-                styles.append(style)
-            }
+            index = next
         }
 
         return (string, styles)
