@@ -345,10 +345,14 @@ public struct Query<Element: PersistentModel>: AnyState {
 
         // ValueObservation 只看已 commit 的 DB；save 后的 contextDidChange 再兜一层。
         // fetch(descriptor) 含 pending delete，删除后未 autosave 前也能立刻刷新。
+        // queue 必须为 nil：corelibs-foundation 的 post() 对指定 queue 的观察者会
+        // addOperation + waitUntilAllOperationsAreFinished 同步等待；通知本身在主线程
+        // 投递时，等待 OperationQueue.main 即等待自己 → 主线程永久死锁（发送即卡死）。
+        // block 内已用 Task { @MainActor } 跳回主线程，语义不变。
         let noteToken = NotificationCenter.default.addObserver(
             forName: ModelContext.contextDidChange,
             object: nil,
-            queue: .main
+            queue: nil
         ) { [weak node] _ in
             Task { @MainActor in
                 guard let n = node else { return }

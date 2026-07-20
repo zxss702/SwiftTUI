@@ -14,7 +14,7 @@ let package = Package(
     ],
     dependencies: [
          .package(url: "https://github.com/apple/swift-docc-plugin", from: "1.0.0"),
-         .package(url: "https://github.com/zxss702/JsonData.git", branch: "main")
+         .package(path: "../JsonData") // 临时本地引用，调试死锁修复；验证后改回 https://github.com/zxss702/JsonData.git
     ],
     targets: [
         .target(
