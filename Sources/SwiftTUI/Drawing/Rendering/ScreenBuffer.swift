@@ -48,9 +48,15 @@ struct ScreenBuffer {
     /// Write a cell with wide-character (CJK / emoji) awareness:
     /// - `\u{0000}` → raw continuation store (legacy callers)
     /// - width 0 → ignored
-    /// - landing on a continuation → retreat to the lead column
-    /// - width 2 → lead + continuation
+    /// - landing on a continuation → blank the straddled char's lead, write in place
+    /// - width 2 → lead + continuation, then clear any orphaned continuation after
     /// - width 1 → clear orphan continuation to the right
+    ///
+    /// Later writes win in place (standard terminal-grid semantics): a sheet /
+    /// popup border landing on the continuation cell of an underlying CJK char
+    /// must stay on its requested column — the old "retreat to lead" shifted
+    /// the border one cell left and tore the panel rectangle. The straddled
+    /// lower character is blanked instead (upper layer has priority).
     mutating func setCell(_ cell: Cell, at position: Position) {
         if cell.char == "\u{0000}" {
             writeRaw(cell, at: position)
@@ -59,30 +65,52 @@ struct ScreenBuffer {
         let cw = cell.char.width
         guard cw > 0 else { return }
 
-        var writePos = position
-        if character(at: writePos) == "\u{0000}", writePos.column.intValue > 0 {
-            writePos = Position(column: writePos.column - 1, line: writePos.line)
+        if character(at: position) == "\u{0000}", position.column.intValue > 0 {
+            blankRaw(at: Position(column: position.column - 1, line: position.line))
         }
 
-        writeRaw(cell, at: writePos)
+        writeRaw(cell, at: position)
         if cw > 1 {
             var cont = cell
             cont.char = "\u{0000}"
             for w in 1 ..< cw {
                 writeRaw(
                     cont,
-                    at: Position(column: writePos.column + Extended(w), line: writePos.line)
+                    at: Position(column: position.column + Extended(w), line: position.line)
                 )
             }
-        } else {
-            let next = Position(column: writePos.column + 1, line: writePos.line)
-            if character(at: next) == "\u{0000}" {
-                var space = Cell(char: " ")
-                space.foregroundColor = cell.foregroundColor
-                space.backgroundColor = cell.backgroundColor
-                space.attributes = cell.attributes
-                writeRaw(space, at: next)
-            }
+        }
+        // The cell after this write may be an orphaned continuation (its lead
+        // was just overwritten). Blank it, keeping the lower layer's style so
+        // panel colors do not bleed past a border.
+        let next = Position(column: position.column + Extended(cw), line: position.line)
+        if character(at: next) == "\u{0000}" {
+            blankRaw(at: next)
+        }
+    }
+
+    /// Replace a cell's glyph with a space while keeping its existing style
+    /// (used to erase halves of straddled wide characters).
+    private mutating func blankRaw(at position: Position) {
+        let finalPos = position + translation
+        guard clipRect.contains(finalPos) else { return }
+
+        let localPos = finalPos - rect.position
+        guard localPos.x >= 0, localPos.y >= 0,
+              localPos.x < rect.size.width.intValue, localPos.y < rect.size.height.intValue
+        else { return }
+
+        if let vt = vtRenderer {
+            let vtPos = VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)
+            let existing = vt.back[vtPos]
+            vt.back[vtPos] = VTCell(character: " ", style: existing.style)
+        } else if var cells {
+            let index = localPos.y * rect.size.width.intValue + localPos.x
+            guard index >= 0 && index < cells.count else { return }
+            var cell = cells[index] ?? Cell(char: " ")
+            cell.char = " "
+            cells[index] = cell
+            self.cells = cells
         }
     }
 
