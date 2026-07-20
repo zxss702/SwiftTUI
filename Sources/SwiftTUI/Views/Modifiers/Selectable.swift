@@ -257,6 +257,8 @@ final class SelectableElement: Element {
             }
             var line = ""
             for column in columns where column < cells.count {
+                // Skip `.selectionDisabled()` cells (line-number gutters).
+                if region.isMasked(column: column, row: row) { continue }
                 guard let char = cells[column], char != "\u{0000}" else { continue }
                 line.append(char)
             }
@@ -350,7 +352,32 @@ extension SelectableElement: SelectionOwner {
 
     func selectionHighlightRegion() -> SelectionHighlightRegion? {
         guard let (start, end) = normalizedSelection else { return nil }
-        return SelectionHighlightRegion(frame: absoluteFrame, start: start, end: end)
+        return SelectionHighlightRegion(
+            frame: absoluteFrame,
+            start: start,
+            end: end,
+            maskedRects: collectMaskedRects()
+        )
+    }
+
+    /// Region-local frames of `.selectionDisabled()` subtrees currently mounted
+    /// under this region. Walked on demand: masked rows inside lazy containers
+    /// mount/unmount with scrolling, so a cached list would go stale.
+    private func collectMaskedRects() -> [Rect] {
+        var rects: [Rect] = []
+        let regionOrigin = absoluteFrame.position
+        func walk(_ element: Element) {
+            if let mask = element as? SelectionMaskElement, mask.isSelectionDisabled {
+                let frame = mask.absoluteFrame
+                rects.append(Rect(position: frame.position - regionOrigin, size: frame.size))
+                return
+            }
+            for child in element.children {
+                walk(child)
+            }
+        }
+        walk(contentHost)
+        return rects
     }
 
     /// Merge instead of replace: a partial redraw only sees part of the row,

@@ -22,6 +22,16 @@ struct SelectionHighlightRegion {
     let start: Position
     /// Selection end in region-local coordinates (inclusive).
     let end: Position
+    /// Region-local rects excluded from selection (`.selectionDisabled()`
+    /// subtrees, e.g. line-number gutters): never highlighted, never copied.
+    var maskedRects: [Rect] = []
+
+    /// Whether a region-local cell is covered by a `.selectionDisabled()` area.
+    func isMasked(column: Int, row: Int) -> Bool {
+        guard !maskedRects.isEmpty else { return false }
+        let position = Position(column: Extended(column), line: Extended(row))
+        return maskedRects.contains { $0.contains(position) }
+    }
 
     /// Selected column range for a local row, or `nil` when the row is
     /// outside the selection. Terminal linear-selection convention: first row
@@ -139,6 +149,9 @@ final class SelectionCoordinator {
             }
 
             for column in lower ..< upper {
+                // `.selectionDisabled()` areas (line-number gutters) are never
+                // part of the visual selection.
+                if region.isMasked(column: column, row: localRow) { continue }
                 buffer.highlightCell(
                     at: Position(column: origin.column + Extended(column), line: absLine),
                     background: TextSelectionStyle.background,
