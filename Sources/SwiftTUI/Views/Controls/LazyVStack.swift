@@ -413,7 +413,11 @@ import Foundation
                 guard let control = loadedElements[index],
                       let childSize = childSizes[index] else { continue }
 
-                if control.layer.frame.size != childSize {
+                // Skip only pure-translation rows (scroll). A row whose subtree
+                // mutated (if/Optional branch swap mounting fresh 0×0 elements,
+                // Text content change) is flagged via `invalidateSizeCacheUpward`
+                // and must relayout even when its measured size is unchanged.
+                if control.consumeNeedsLayoutPass() || control.layer.frame.size != childSize {
                     control.layout(size: childSize)
                 }
                 control.layer.frame.position.line = position(for: index)

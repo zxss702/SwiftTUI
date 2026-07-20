@@ -174,6 +174,23 @@ import Foundation
     private var verticalFlexCache: (width: Extended, value: Extended)?
     private var horizontalFlexCache: (height: Extended, value: Extended)?
 
+    /// Structural/content dirt for lazy containers that skip child `layout`
+    /// when the measured size is unchanged (LazyVStack). Set alongside
+    /// `invalidateSizeCacheUpward()` — every subtree mutation (add/remove
+    /// subview, Text content change) already funnels through that path — and
+    /// consumed by the container to force a relayout even when the row's
+    /// measured size did not change (e.g. `if hover { Menu }` branch swaps
+    /// that mount fresh 0×0 elements).
+    private var needsLayoutPass = false
+
+    /// Read-and-clear `needsLayoutPass`. Deliberately not tied to `layout()`
+    /// itself: subclasses are not required to call `super.layout` (PaddingElement).
+    func consumeNeedsLayoutPass() -> Bool {
+        let value = needsLayoutPass
+        needsLayoutPass = false
+        return value
+    }
+
     func size(proposedSize: Size) -> Size {
         proposedSize
     }
@@ -194,6 +211,7 @@ import Foundation
         sizeCacheValue = nil
         verticalFlexCache = nil
         horizontalFlexCache = nil
+        needsLayoutPass = true
         parent?.invalidateSizeCacheUpward()
     }
 
