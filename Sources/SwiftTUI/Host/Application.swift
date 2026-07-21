@@ -311,9 +311,6 @@ public final class Application {
     func invalidateNode(_ node: Node, layout: Bool = false) {
         guard node.isAttached(to: self) else { return }
         transaction.invalidate(node, layout: layout)
-        if !isRefreshingPresentedPanels {
-            window.popupPresenter?.noteContentInvalidated()
-        }
         // During an open commit, the update loop already drains `transaction`
         // via `needsAnother`. Scheduling here only set `needsReschedule` and
         // spawned extra frames (paint storms ~70ms full redraws).

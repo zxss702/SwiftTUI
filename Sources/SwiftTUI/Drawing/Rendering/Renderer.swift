@@ -30,36 +30,6 @@ import Foundation
         // redrawn (missing char halves / stray border glyphs after close).
         rect = expandedToWideCharBounds(rect)
 
-        if let vtRenderer = vtRenderer {
-            // Clear the dirty rect, expanding each cell to its full wide-char
-            // span so we never leave an orphan lead / `\u{0000}` continuation.
-            let maxCol = layer.frame.size.width.intValue
-            let maxRow = layer.frame.size.height.intValue
-            let empty = VTCell(character: " ", style: VTStyle(foreground: nil, background: nil, attributes: []))
-            for line in rect.minLine.intValue ... rect.maxLine.intValue {
-                var columns = Set<Int>()
-                for column in rect.minColumn.intValue ... rect.maxColumn.intValue {
-                    guard column >= 0, column < maxCol, line >= 0, line < maxRow else { continue }
-                    columns.insert(column)
-                    let vtPos = VTPosition(row: line + 1, column: column + 1)
-                    let ch = vtRenderer.back[vtPos].character
-                    if ch == "\u{0000}", column > 0 {
-                        columns.insert(column - 1)
-                    } else if ch.width > 1, column + 1 < maxCol {
-                        columns.insert(column + 1)
-                    }
-                }
-                for column in columns {
-                    let vtPos = VTPosition(row: line + 1, column: column + 1)
-                    if vtPos.column >= 1, vtPos.row >= 1,
-                       vtPos.column <= maxCol, vtPos.row <= maxRow
-                    {
-                        vtRenderer.back[vtPos] = empty
-                    }
-                }
-            }
-        }
-        
         // When vtRenderer is injected, ScreenBuffer directly maps TUI Cell writes to VTCell.
         var buffer = ScreenBuffer(rect: rect, vtRenderer: vtRenderer)
         layer.draw(into: &buffer)
@@ -77,8 +47,8 @@ import Foundation
     /// - left snap: a continuation cell at the edge pulls its lead inside the
     ///   clip, so the redraw can restore the whole glyph;
     /// - right snap: a wide lead at the edge pulls its continuation inside.
-    /// Without this, the pre-clear blanks cells the clipped redraw can never
-    /// repaint, leaving missing halves after a popover closes.
+    /// Without this, a clipped redraw can never restore straddled halves after
+    /// a popover closes.
     private func expandedToWideCharBounds(_ rect: Rect) -> Rect {
         let maxCol = layer.frame.size.width.intValue
         let maxRow = layer.frame.size.height.intValue
