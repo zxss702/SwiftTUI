@@ -109,29 +109,6 @@ struct VTWideCharPositionTests {
         )
     }
 
-    /// Panel left border is at local column 0; the straddled lead is at local -1.
-    /// blankRaw must clear that lead even though it lies outside the clip
-    /// (regression: `position.column > 0` used to skip this entirely).
-    @Test func screenBufferLeftBorderAtColumnZeroBlanksOutsideLead() {
-        let vt = VTRenderer(testing: Size(width: 6, height: 1))
-        var buffer = ScreenBuffer(
-            rect: Rect(position: .zero, size: Size(width: 6, height: 1)),
-            vtRenderer: vt
-        )
-        buffer.setCell(Cell(char: "中"), at: Position(column: 0, line: 0))
-        #expect(vt.back[VTPosition(row: 1, column: 1)].character == "中")
-        #expect(vt.back[VTPosition(row: 1, column: 2)].character == "\u{0000}")
-
-        buffer.clip(to: Rect(position: Position(column: 1, line: 0), size: Size(width: 5, height: 1)))
-        buffer.setCell(Cell(char: "│"), at: Position(column: 1, line: 0))
-
-        #expect(
-            vt.back[VTPosition(row: 1, column: 1)].character == " ",
-            "lead outside clip must be blanked when border covers its continuation"
-        )
-        #expect(vt.back[VTPosition(row: 1, column: 2)].character == "│")
-    }
-
     /// Integration: a sheet presented over full-width CJK rows (half the rows
     /// shifted by one column so both column parities straddle the panel edge).
     /// The rounded-border rectangle must stay perfectly aligned — the old

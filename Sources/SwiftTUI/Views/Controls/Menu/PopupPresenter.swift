@@ -403,45 +403,6 @@ private func installInheritedEnvironment(on node: Node, from source: Node?) {
     }
 }
 
-/// Repaint only the floating panel — not the full window overlay host.
-/// Full-window invalidation while a popover is open used to pre-clear the
-/// navigation bar and cause visible flicker when the user scrolled underneath.
-@MainActor
-private func invalidatePresentationPanel(of control: Element, entry: PresentationRecord) {
-    guard let frame = entry.resolvedPanelFrame ?? entry.panelElement?.absoluteFrame else {
-        control.layer.invalidate()
-        return
-    }
-    let origin = control.layer.frame.position
-    let local = Rect(
-        position: Position(column: frame.position.column - origin.column, line: frame.position.line - origin.line),
-        size: frame.size
-    )
-    let bounds = Rect(position: .zero, size: control.layer.frame.size)
-    guard let clipped = local.intersection(with: bounds) else { return }
-    control.layer.invalidate(rect: clipped)
-}
-
-/// Pin floating menu/popover chrome to the panel rect so later invalidates
-/// stay local instead of dirtying the full overlay host (navigation bar flicker).
-@MainActor
-private func finalizePanelChromeLayout(
-    chrome: Element,
-    panelElement: Element,
-    panelSize: Size,
-    at column: Extended,
-    line: Extended,
-    entry: PresentationRecord
-) {
-    panelElement.layer.setFrame(Rect(position: .zero, size: panelSize), invalidate: false)
-    chrome.layer.setFrame(
-        Rect(position: Position(column: column, line: line), size: panelSize),
-        invalidate: false
-    )
-    chrome.layer.invalidate()
-    entry.panelFrame = panelElement.absoluteFrame
-}
-
 @MainActor
 private func attachPanel(to host: Element, panel: Element, stored: inout Element!) {
     if stored === panel, host.children.contains(where: { $0 === panel }) {
@@ -492,7 +453,7 @@ private struct FloatingPopupLayer: View, PrimitiveView {
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
         entry.panelElement = control.panelElement
         entry.hostElement = control
-        invalidatePresentationPanel(of: control, entry: entry)
+        control.layer.invalidate()
     }
 }
 
@@ -545,19 +506,15 @@ private final class FloatingPopupElement: Element {
         if line + panelSize.height > size.height {
             line = max(0, size.height - panelSize.height)
         }
-        finalizePanelChromeLayout(
-            chrome: self,
-            panelElement: panelElement,
-            panelSize: panelSize,
-            at: column,
-            line: line,
-            entry: entry
-        )
+        panelElement.layer.frame.position = Position(column: column, line: line)
+        // Window-absolute frame for Application.inPanel / hitTestPointer.
+        entry.panelFrame = panelElement.absoluteFrame
     }
 
     override func draw(into buffer: inout ScreenBuffer) {}
 
     override func hitTest(position: Position) -> Element? {
+        // `position` is in parent-local coords (same as Element.hitTest).
         guard let panelElement else { return nil }
         return panelElement.hitTest(position: position - layer.frame.position)
     }
@@ -606,7 +563,7 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
         entry.panelElement = control.panelElement
         entry.hostElement = control
-        invalidatePresentationPanel(of: control, entry: entry)
+        control.layer.invalidate()
     }
 }
 
@@ -704,14 +661,8 @@ private final class PopoverFloatingElement: Element {
             line = max(0, size.height - panelSize.height)
         }
 
-        finalizePanelChromeLayout(
-            chrome: self,
-            panelElement: panelElement,
-            panelSize: panelSize,
-            at: column,
-            line: line,
-            entry: entry
-        )
+        panelElement.layer.frame.position = Position(column: column, line: line)
+        entry.panelFrame = panelElement.absoluteFrame
     }
 
     override func draw(into buffer: inout ScreenBuffer) {}

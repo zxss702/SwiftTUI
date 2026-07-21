@@ -311,6 +311,9 @@ public final class Application {
     func invalidateNode(_ node: Node, layout: Bool = false) {
         guard node.isAttached(to: self) else { return }
         transaction.invalidate(node, layout: layout)
+        if !isRefreshingPresentedPanels {
+            window.popupPresenter?.noteContentInvalidated()
+        }
         // During an open commit, the update loop already drains `transaction`
         // via `needsAnother`. Scheduling here only set `needsReschedule` and
         // spawned extra frames (paint storms ~70ms full redraws).
@@ -505,7 +508,7 @@ public final class Application {
             }
             // Hard re-enable mouse modes on first click — terminals that mute
             // 1003 until interaction often start emitting moves after this.
-            if !didReassertMouseModes, let terminal = vtRenderer?.terminalIfAvailable {
+            if !didReassertMouseModes, let terminal = vtRenderer?.terminal {
                 didReassertMouseModes = true
                 let mouseOn = Self.mouseModesSequence
                 Task { @MainActor in
@@ -899,38 +902,4 @@ extension Application {
     var testing_rootElement: Element { rootElement }
 
     var testing_isUpdating: Bool { isUpdating }
-
-    /// Layout + paint through the *real* VT double-buffer + damage pipeline
-    /// (no terminal IO). Unlike `testing_prepare`, which draws a fresh
-    /// `ScreenBuffer` from scratch each inspection, this keeps a persistent
-    /// back buffer with partial dirty-rect redraws — required to reproduce
-    /// stale-cell bugs (e.g. a popover close leaving torn glyphs behind).
-    func testing_prepareVT(
-        size: Size = Size(width: 80, height: 24),
-        terminal: (any VTTerminal)? = nil
-    ) async throws {
-        let vt = VTRenderer(testing: size, terminal: terminal)
-        vtRenderer = vt
-        renderer.vtRenderer = vt
-        updateWindowSize(size: size)
-        transaction.requestLayout()
-        transaction.requestPaint()
-        window.layer.invalidate()
-        _ = try await commitFrame()
-        try await testing_drainUntilIdle()
-    }
-
-    /// Character currently held in the VT back buffer (the persistent screen
-    /// state) at a 0-based window position. `nil` when out of bounds or when
-    /// no VT renderer is installed. Wide-char continuation cells read `\u{0000}`.
-    func testing_vtCharacter(at position: Position) -> Character? {
-        guard let vtRenderer else { return nil }
-        let size = vtRenderer.back.size
-        let row = position.line.intValue + 1
-        let column = position.column.intValue + 1
-        guard row >= 1, column >= 1, row <= size.heightInt, column <= size.widthInt else {
-            return nil
-        }
-        return vtRenderer.back[VTPosition(row: row, column: column)].character
-    }
 }
