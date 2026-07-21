@@ -65,8 +65,16 @@ struct ScreenBuffer {
         let cw = cell.char.width
         guard cw > 0 else { return }
 
-        if character(at: position) == "\u{0000}", position.column.intValue > 0 {
-            blankRaw(at: Position(column: position.column - 1, line: position.line))
+        // Before writing at `position`, destroy any wide glyph that currently
+        // owns this column. The lead often sits one column *outside* a panel
+        // clip (left/right border on the continuation). Do not require
+        // `position.column > 0` — the left border is drawn at local column 0,
+        // and its straddled lead is at local -1 (still a valid absolute cell).
+        let leadPos = Position(column: position.column - 1, line: position.line)
+        let here = peekCharacter(at: position)
+        let lead = peekCharacter(at: leadPos)
+        if here == "\u{0000}" || (lead?.width ?? 0) > 1 {
+            blankRaw(at: leadPos, beyondClip: true)
         }
 
         if cw > 1 {
@@ -99,37 +107,70 @@ struct ScreenBuffer {
             writeRaw(cell, at: position)
         }
         // The cell after this write may be an orphaned continuation (its lead
-        // was just overwritten). Blank it, keeping the lower layer's style so
-        // panel colors do not bleed past a border.
+        // was just overwritten). Blank it even if it sits outside the clip
+        // (panel border one column left of a wide underlay char).
         let next = Position(column: position.column + Extended(cw), line: position.line)
-        if character(at: next) == "\u{0000}" {
-            blankRaw(at: next)
+        if peekCharacter(at: next) == "\u{0000}" {
+            blankRaw(at: next, beyondClip: true)
         }
     }
 
     /// Replace a cell's glyph with a space while keeping its existing style
     /// (used to erase halves of straddled wide characters).
-    private mutating func blankRaw(at position: Position) {
+    ///
+    /// `beyondClip`: when true, skip `clipRect` / dirty-rect gates and write
+    /// straight into the VT back buffer (window-bounded). Required for the
+    /// lead cell of a CJK glyph whose continuation was covered by an upper
+    /// layer — that lead lies outside the upper layer's clip.
+    private mutating func blankRaw(at position: Position, beyondClip: Bool = false) {
         let finalPos = position + translation
-        guard clipRect.contains(finalPos) else { return }
 
+        if let vt = vtRenderer {
+            let maxCol = vt.back.size.widthInt
+            let maxRow = vt.back.size.heightInt
+            guard finalPos.x >= 0, finalPos.y >= 0,
+                  finalPos.x < maxCol, finalPos.y < maxRow
+            else { return }
+            if !beyondClip {
+                guard clipRect.contains(finalPos) else { return }
+                let localPos = finalPos - rect.position
+                guard localPos.x >= 0, localPos.y >= 0,
+                      localPos.x < rect.size.width.intValue,
+                      localPos.y < rect.size.height.intValue
+                else { return }
+            }
+            let vtPos = VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)
+            let existing = vt.back[vtPos]
+            vt.back[vtPos] = VTCell(character: " ", style: existing.style)
+            return
+        }
+
+        guard clipRect.contains(finalPos) else { return }
         let localPos = finalPos - rect.position
         guard localPos.x >= 0, localPos.y >= 0,
               localPos.x < rect.size.width.intValue, localPos.y < rect.size.height.intValue
         else { return }
+        guard var cells else { return }
+        let index = localPos.y * rect.size.width.intValue + localPos.x
+        guard index >= 0 && index < cells.count else { return }
+        var cell = cells[index] ?? Cell(char: " ")
+        cell.char = " "
+        cells[index] = cell
+        self.cells = cells
+    }
 
+    /// Read a cell without applying `clipRect` (VT back buffer / headless store).
+    private func peekCharacter(at position: Position) -> Character? {
+        let finalPos = position + translation
         if let vt = vtRenderer {
-            let vtPos = VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)
-            let existing = vt.back[vtPos]
-            vt.back[vtPos] = VTCell(character: " ", style: existing.style)
-        } else if var cells {
-            let index = localPos.y * rect.size.width.intValue + localPos.x
-            guard index >= 0 && index < cells.count else { return }
-            var cell = cells[index] ?? Cell(char: " ")
-            cell.char = " "
-            cells[index] = cell
-            self.cells = cells
+            let maxCol = vt.back.size.widthInt
+            let maxRow = vt.back.size.heightInt
+            guard finalPos.x >= 0, finalPos.y >= 0,
+                  finalPos.x < maxCol, finalPos.y < maxRow
+            else { return nil }
+            return vt.back[VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)].character
         }
+        return character(at: position)
     }
 
     /// Whether a write at `position` would pass the clip and bounds checks.
