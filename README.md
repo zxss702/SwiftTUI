@@ -1,38 +1,40 @@
 # SwiftTUI
 
-把 SwiftUI 带进终端。支持 macOS、Linux、Win。使用 VT 高性能渲染。
+**[English](README.md)** | [中文](README.zh-CN.md)
 
-SwiftTUI 将 SwiftUI 的声明式 API 引入终端应用开发。你只需像写 SwiftUI 一样描述界面，就能得到一个以鼠标驱动为主的 TUI 程序——点击按钮、悬停高亮、滚轮翻页。
+Bring SwiftUI into the terminal. Works on macOS, Linux and Windows, powered by high-performance VT rendering.
 
-## 核心特性
+SwiftTUI brings SwiftUI's declarative API to terminal application development. Describe your interface the way you would in SwiftUI, and you get a TUI program driven primarily by the mouse—click buttons, hover for highlights, scroll through pages with the wheel.
 
-- 鼠标驱动：绝大部分主要组件均支持鼠标点击、悬浮、滚动等。
-- SwiftUI-DSL Like：不过多赘述了，基本上和 SwiftUI 差不多。
-- JsonData 兼容：支持类似 SwiftUI 中 `@Query` 等用法。（JsonData 是 SwiftData 的 public api 基本等效物。详情请参阅 https://github.com/zxss702/JsonData，采用 MPL 2 协议开源。）
-- 高性能渲染：底层采用 VirtualTerminal 子系统。采用 Push 模式。
+## Core features
 
-## 目前支持的 SwiftUI 能力：
+- Mouse-driven: most major components support mouse click, hover, scrolling, and more.
+- SwiftUI-DSL-like: no need to over-explain—it basically feels like SwiftUI.
+- JsonData compatible: supports usages similar to `@Query` in SwiftUI. (JsonData is essentially the public-API equivalent of SwiftData. See https://github.com/zxss702/JsonData for details; it's open-sourced under the MPL-2.0 license.)
+- High-performance rendering: built on the VirtualTerminal subsystem with a push-based model.
 
-✓ `Button`（点击/悬浮）、`Text`、`TextField`、`TextEdit`
-✓ `ScrollView`、`GeometryReader`、`Spacer`、`Divider`
-✓ `VStack`、`HStack`、`ZStack`、`LazyVStack`、`LazyVGrid`
-✓ `Color` 支持 ANSI / xterm / TrueColor
-✓ `.frame()`、`.padding()`、`.border()`、`.foregroundColor()`、`.background()`
-✓ `.bold()`、`.italic()`、`.underline()`、`.strikethrough()`、`.onAppear()`、`.onHover()`、`.environment(_:_:)`
-✓ `@State`、`@Binding`、`@Environment`、`@Query`
-✓ `ForEach`、`Group`、`@ViewBuilder`
+## Currently supported SwiftUI capabilities
 
-## 快速开始
+✓ `Button` (click/hover), `Text`, `TextField`, `TextEdit`
+✓ `ScrollView`, `GeometryReader`, `Spacer`, `Divider`
+✓ `VStack`, `HStack`, `ZStack`, `LazyVStack`, `LazyVGrid`
+✓ `Color` with ANSI / xterm / TrueColor support
+✓ `.frame()`, `.padding()`, `.border()`, `.foregroundColor()`, `.background()`
+✓ `.bold()`, `.italic()`, `.underline()`, `.strikethrough()`, `.onAppear()`, `.onHover()`, `.environment(_:_:)`
+✓ `@State`, `@Binding`, `@Environment`, `@Query`
+✓ `ForEach`, `Group`, `@ViewBuilder`
 
-添加 SwiftTUI 依赖，然后像写 SwiftUI 一样写视图。启动时用 `Application` 并传入根视图：
+## Quick start
+
+Add SwiftTUI as a dependency and write views just like you would in SwiftUI. Launch it with `Application`, passing in your root view:
 
 ```swift
 import SwiftTUI
 
 struct MyTerminalView: View {
     var body: some View {
-        Button("点击我") {
-            print("被点击了！")
+        Button("Click me") {
+            print("Clicked!")
         }
     }
 }
@@ -40,13 +42,13 @@ struct MyTerminalView: View {
 try await Application(rootView: MyTerminalView()).start()
 ```
 
-与 JsonData（SwiftData）配合
+Working with JsonData (SwiftData)
 
 ```swift
 import SwiftTUI
 import JsonData
 
-struct MyTerminalView: View { ... } // 与在 SwiftUI 中使用 SwiftData 基本一致。
+struct MyTerminalView: View { ... } // Basically the same as using SwiftData in SwiftUI.
 
 let schema = Schema([TaskItem.self])
 let modelConfiguration = ModelConfiguration(schema: schema, url: URL(fileURLWithPath: "todo.db"))
@@ -54,47 +56,49 @@ let modelConfiguration = ModelConfiguration(schema: schema, url: URL(fileURLWith
 let modelContainer = try ModelContainer(for: schema, configurations: [modelConfiguration])
 
 try await Application(rootView: MyTerminalView())
-    .modelContainer(modelContainer) // 通过此注入环境以解决刷新问题。当前只支持一个窗口使用一个 data 容器。
+    .modelContainer(modelContainer) // Injects the environment to resolve refresh issues. Currently one data container per window.
     .start()
 ```
 
-在终端中切换到你的包目录后运行：
+Switch to your package directory in the terminal and run:
 
 ```
 swift run
 ```
 
-## 示例
+## Examples
 
-仓库内提供了几个简单示例，可供参考。
+The repository includes a few simple examples for reference.
 
-## 架构
+## Architecture
 
-Host：输入泵 + 合并 wake 的 frame 任务；交互事件当轮 settle，mouse-move 只调度（避免 1003 饿死键鼠）。帧阶段固定为 Update → Layout → Paint → Present。详见 [Docs/Architecture.md](Docs/Architecture.md)。
+Host: an input pump plus frame tasks that coalesce wakes; interaction events settle in the current frame, while mouse-move is only scheduled (to avoid the key/mouse starvation caused by 1003). The frame stages are fixed as Update → Layout → Paint → Present. See [Docs/Architecture.md](Docs/Architecture.md) for details.
 
 ```
-View（SwiftUI 风格 DSL）
+View (SwiftUI-style DSL)
        │
-   ViewGraph（Node / @State 槽位 / Observation）
+   ViewGraph (Node / @State slots / Observation)
        │
-   Element 树（layout / focus / hit-test / paint）
+   Element tree (layout / focus / hit-test / paint)
        │
-VirtualTerminal（差分 present）
+VirtualTerminal (diff present)
 ```
 
-入口刻意为 CLI 形状：`Application(rootView:).start()`（不是 `App` / `WindowGroup`）。
+The entry point is intentionally CLI-shaped: `Application(rootView:).start()` (not `App` / `WindowGroup`).
 
-## 参与贡献
-我们非常欢迎你为 SwiftTUI 提交代码或提出宝贵建议！在提交代码前，请务必阅读我们的 [贡献指南 (CONTRIBUTING.md)](CONTRIBUTING.md)。
+## Contributing
 
-## 开源协议
-本项目采用 **MPL-2.0 (Mozilla Public License 2.0)** 协议开源。
+We warmly welcome code contributions and suggestions for SwiftTUI! Before submitting code, please read our [contributing guide (CONTRIBUTING.md)](CONTRIBUTING.md).
 
-这意味着：
-- **您可以自由地**将本框架用于您的商业闭源项目中（无需将您的 App 开源）。
-- **但如果您直接修改了本框架的源码**，您必须将这些针对本框架的修改以 MPL-2.0 协议开源回馈给社区。我们鼓励大家共同将 SwiftTUI 维护得更好！
+## License
 
-## 获赞历史
+This project is open-sourced under the **MPL-2.0 (Mozilla Public License 2.0)**.
+
+What this means:
+- **You are free** to use this framework in your commercial, closed-source projects (without open-sourcing your app).
+- **But if you directly modify the source of this framework**, you must open-source those modifications back to the community under the MPL-2.0 license. We encourage everyone to help make SwiftTUI even better!
+
+## Star history
 
 <a href="https://star-history.com/#zxss702/SwiftTUI">
   <picture>
