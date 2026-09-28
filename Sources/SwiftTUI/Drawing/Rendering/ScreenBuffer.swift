@@ -70,11 +70,15 @@ struct ScreenBuffer {
         // clip (left/right border on the continuation). Do not require
         // `position.column > 0` — the left border is drawn at local column 0,
         // and its straddled lead is at local -1 (still a valid absolute cell).
-        let leadPos = Position(column: position.column - 1, line: position.line)
-        let here = peekCharacter(at: position)
-        let lead = peekCharacter(at: leadPos)
-        if here == "\u{0000}" || (lead?.width ?? 0) > 1 {
-            blankRaw(at: leadPos, beyondClip: true)
+        // The kill is gated on this write actually landing: a write clipped
+        // away must not erase an underlay glyph it never overwrites.
+        if isWritable(at: position) {
+            let leadPos = Position(column: position.column - 1, line: position.line)
+            let here = peekCharacter(at: position)
+            let lead = peekCharacter(at: leadPos)
+            if here == "\u{0000}" || (lead?.width ?? 0) > 1 {
+                blankRaw(at: leadPos, beyondClip: true)
+            }
         }
 
         if cw > 1 {
@@ -108,9 +112,11 @@ struct ScreenBuffer {
         }
         // The cell after this write may be an orphaned continuation (its lead
         // was just overwritten). Blank it even if it sits outside the clip
-        // (panel border one column left of a wide underlay char).
+        // (panel border one column left of a wide underlay char) — but only
+        // when the write's last cell actually landed.
         let next = Position(column: position.column + Extended(cw), line: position.line)
-        if peekCharacter(at: next) == "\u{0000}" {
+        if isWritable(at: Position(column: position.column + Extended(cw - 1), line: position.line)),
+           peekCharacter(at: next) == "\u{0000}" {
             blankRaw(at: next, beyondClip: true)
         }
     }
@@ -145,7 +151,9 @@ struct ScreenBuffer {
             return
         }
 
-        guard clipRect.contains(finalPos) else { return }
+        if !beyondClip {
+            guard clipRect.contains(finalPos) else { return }
+        }
         let localPos = finalPos - rect.position
         guard localPos.x >= 0, localPos.y >= 0,
               localPos.x < rect.size.width.intValue, localPos.y < rect.size.height.intValue
@@ -197,7 +205,7 @@ struct ScreenBuffer {
         if let vt = vtRenderer {
             let vtPos = VTPosition(row: finalPos.y + 1, column: finalPos.x + 1)
             let vtCell = vt.back[vtPos]
-            
+
             let fg = convertColor(cell.foregroundColor)
             var bg = convertColor(cell.backgroundColor ?? .default)
             

@@ -132,6 +132,66 @@ struct VTWideCharPositionTests {
         #expect(vt.back[VTPosition(row: 1, column: 2)].character == "│")
     }
 
+    /// A write that is clipped away must NOT destroy the wide glyph whose
+    /// continuation it merely *tried* to touch: the straddle kill must only
+    /// fire when the incoming cell actually lands. Regression — during partial
+    /// repaints a layer redraws its full text while the dirty clip admits only
+    /// part of it; the clipped cells used to blank the underlay glyph's lead
+    /// beyond the clip, so text vanished even though nothing was painted over
+    /// it (title "神衍" erased, its element still alive at the right frame).
+    @Test func clippedWriteDoesNotDestroyCJKUnderlay() {
+        let vt = VTRenderer(testing: Size(width: 6, height: 1))
+        var buffer = ScreenBuffer(
+            rect: Rect(position: .zero, size: Size(width: 6, height: 1)),
+            vtRenderer: vt
+        )
+        buffer.setCell(Cell(char: "神"), at: Position(column: 0, line: 0))
+        buffer.setCell(Cell(char: "衍"), at: Position(column: 2, line: 0))
+        #expect(vt.back[VTPosition(row: 1, column: 1)].character == "神")
+        #expect(vt.back[VTPosition(row: 1, column: 3)].character == "衍")
+
+        // Only column 0 is writable; the writes at the two continuation cells
+        // are clipped away entirely.
+        buffer.clip(to: Rect(position: .zero, size: Size(width: 1, height: 1)))
+        buffer.setCell(Cell(char: "x"), at: Position(column: 1, line: 0))
+        buffer.setCell(Cell(char: "y"), at: Position(column: 3, line: 0))
+
+        #expect(
+            vt.back[VTPosition(row: 1, column: 1)].character == "神",
+            "clipped write on a continuation must not blank the underlay lead"
+        )
+        #expect(
+            vt.back[VTPosition(row: 1, column: 3)].character == "衍",
+            "clipped write on a continuation must not blank the underlay lead"
+        )
+    }
+
+    /// Same gate on the trailing edge: a clipped write must not blank the
+    /// orphaned continuation to its right — only a write whose last cell
+    /// landed may clean up the orphan.
+    @Test func clippedWriteDoesNotBlankTrailingContinuation() {
+        let vt = VTRenderer(testing: Size(width: 6, height: 1))
+        var buffer = ScreenBuffer(
+            rect: Rect(position: .zero, size: Size(width: 6, height: 1)),
+            vtRenderer: vt
+        )
+        buffer.setCell(Cell(char: "神"), at: Position(column: 0, line: 0))
+
+        // Clip admits only column 0, so the write at column 0 lands and the
+        // orphan cleanup is still expected to fire there.
+        buffer.setCell(Cell(char: "a"), at: Position(column: 0, line: 0))
+        #expect(vt.back[VTPosition(row: 1, column: 2)].character == " ")
+
+        buffer.setCell(Cell(char: "衍"), at: Position(column: 2, line: 0))
+        buffer.clip(to: Rect(position: Position(column: 4, line: 0), size: Size(width: 2, height: 1)))
+        buffer.setCell(Cell(char: "b"), at: Position(column: 2, line: 0))
+        #expect(
+            vt.back[VTPosition(row: 1, column: 3)].character == "衍",
+            "clipped write must not blank or overwrite the underlay glyph"
+        )
+        #expect(vt.back[VTPosition(row: 1, column: 4)].character == "\u{0000}")
+    }
+
     /// Integration: a sheet presented over full-width CJK rows (half the rows
     /// shifted by one column so both column parities straddle the panel edge).
     /// The rounded-border rectangle must stay perfectly aligned — the old
