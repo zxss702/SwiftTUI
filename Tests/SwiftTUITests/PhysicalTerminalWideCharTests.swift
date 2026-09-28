@@ -256,7 +256,10 @@ struct PhysicalScreenEmulator {
     private mutating func applyCSI(params: String, final: Character) {
         // Private modes (?...h/l), SGR (m), erase (J/K) etc. do not move cells.
         if params.hasPrefix("?") { return }
-        let numbers = params.split(separator: ";").map { Int($0) ?? 1 }
+        // Keep empty params — `\e[;57H` means row=default(1), col=57; dropping
+        // the empty first field would misread the column as the row.
+        let numbers = params.split(separator: ";", omittingEmptySubsequences: false)
+            .map { Int($0) ?? 1 }
         let n = numbers.first ?? 1
         switch final {
         case "H", "f":
