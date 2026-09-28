@@ -812,7 +812,9 @@ private final class ModalFloatingElement: Element {
     }
 
     override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
-        false
+        // 模态层吞掉面板未消费的滚轮事件：落在导航栏/边框/遮罩上的滚动
+        // 不能穿透到 sheet 底下的主界面。
+        true
     }
 
     override func handleKeyEvent(_ event: KeyEvent) {
@@ -888,11 +890,9 @@ struct SheetPanel<Content: View>: View {
     let content: Content
 
     var body: some View {
-        ScrollView {
-            content
-        }
-        .background(.default)
-        .border(.rounded)
+        content
+            .background(.default)
+            .border(.rounded)
     }
 }
 
