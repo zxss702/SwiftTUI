@@ -676,19 +676,18 @@ public final class Application {
                 rootElement.layout(size: window.layer.frame.size)
                 layoutPasses += 1
                 didLayout = true
-                window.layer.invalidate()
             }
-
             // 4. Paint from the accumulated dirty rect (no forced full-window expand).
-            if window.layer.invalidated == nil, transaction.needsPaint {
-                window.layer.invalidate()
-            }
+            // A paint request with nothing dirty means "offer a paint pass"
+            // (focus caret, editor commit) — not "repaint the whole window";
+            // fabricating a full invalidate here blew away panel-local dirty
+            // rects and flickered the entire screen on every popover refresh.
             if window.layer.invalidated != nil {
                 testing_lastPaintRect = window.layer.invalidated
                 renderer.update()
-                transaction.clearPaint()
                 didPaint = true
             }
+            transaction.clearPaint()
 
             let needsAnother =
                 !transaction.invalidatedNodes.isEmpty

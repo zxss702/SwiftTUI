@@ -384,6 +384,25 @@ private struct PresentationChrome: View {
     }
 }
 
+/// Repaint only the floating panel — not the full window overlay host.
+/// Full-window invalidation while a popover is open used to pre-clear the
+/// navigation bar and cause visible flicker when the user scrolled underneath.
+@MainActor
+private func invalidatePresentationPanel(of control: Element, entry: PresentationRecord) {
+    guard let frame = entry.resolvedPanelFrame ?? entry.panelElement?.absoluteFrame else {
+        control.layer.invalidate()
+        return
+    }
+    let origin = control.layer.frame.position
+    let local = Rect(
+        position: Position(column: frame.position.column - origin.column, line: frame.position.line - origin.line),
+        size: frame.size
+    )
+    let bounds = Rect(position: .zero, size: control.layer.frame.size)
+    guard let clipped = local.intersection(with: bounds) else { return }
+    control.layer.invalidate(rect: clipped)
+}
+
 // MARK: - Panel attach helper
 
 /// 叠层挂在根 `PopupOverlayHost` 下，默认只有根上的 `PopupPresenter`。
@@ -453,7 +472,7 @@ private struct FloatingPopupLayer: View, PrimitiveView {
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
         entry.panelElement = control.panelElement
         entry.hostElement = control
-        control.layer.invalidate()
+        invalidatePresentationPanel(of: control, entry: entry)
     }
 }
 
@@ -563,7 +582,7 @@ private struct PopoverFloatingLayer: View, PrimitiveView {
         attachPanel(to: control, panel: node.children[0].element(at: 0), stored: &control.panelElement)
         entry.panelElement = control.panelElement
         entry.hostElement = control
-        control.layer.invalidate()
+        invalidatePresentationPanel(of: control, entry: entry)
     }
 }
 
