@@ -307,7 +307,9 @@ import Foundation
     /// Hit-test leaf, then climb to the pointer owner (Button / editor / …).
     func pointerGestureTarget(at absolutePosition: Position) -> Element? {
         guard let leaf = hitTest(position: absolutePosition) else { return nil }
-        let normal = leaf.pointerTargetOnClick ?? leaf
+        let normal = leaf.pointerTargetOnClick
+            ?? leaf.donatedPointerCaptureTarget(at: absolutePosition)
+            ?? leaf
         // A `.selectable()` ancestor owns drags over its subtree — except when
         // the press lands on a focusable text control, whose own editing
         // selection handles dragging.
@@ -325,7 +327,9 @@ import Foundation
     /// interceptor to re-forward clean clicks).
     func pointerGestureTargetBypassingInterception(at absolutePosition: Position) -> Element? {
         guard let leaf = hitTest(position: absolutePosition) else { return nil }
-        return leaf.pointerTargetOnClick ?? leaf
+        return leaf.pointerTargetOnClick
+            ?? leaf.donatedPointerCaptureTarget(at: absolutePosition)
+            ?? leaf
     }
 
     /// Top-down mouse delivery: front-most child under the point first, then self.
@@ -415,6 +419,43 @@ import Foundation
     /// `HStack` / `VStack` padding may hit the stack; donate the first selectable
     /// child (e.g. TextEditor). Root `ZStack` / overlay must leave this `false`.
     var donatesDescendantPointerOnClick: Bool { false }
+
+    /// Whether hit donation may descend into this subtree. `.hidden`,
+    /// `.allowsHitTesting(false)` and `.disabled` refuse — their children must
+    /// not receive clicks through chrome donation.
+    var acceptsHitDescendants: Bool { true }
+
+    /// Positional donation for pointer-capture descendants (Button, link Text).
+    /// A click on stack spacing / row chrome / label-adjacent cells misses every
+    /// child's bounds, so the ancestor walk in ``pointerTargetOnClick`` never
+    /// reaches a Button — donate to the capture owner covering the hit's line
+    /// band (nearest column wins when a row holds several).
+    func donatedPointerCaptureTarget(at absolutePosition: Position) -> Element? {
+        guard donatesDescendantPointerOnClick else { return nil }
+        var best: Element?
+        var bestDistance = Extended(Int.max)
+        func visit(_ element: Element) {
+            for child in element.children where child.acceptsHitDescendants {
+                if child.claimsPointerCapture {
+                    let frame = child.absoluteFrame
+                    guard absolutePosition.line >= frame.position.line,
+                          absolutePosition.line < frame.position.line + frame.size.height
+                    else { continue }
+                    let left = frame.position.column
+                    let right = frame.position.column + frame.size.width
+                    let distance = max(Extended(0), max(left - absolutePosition.column, absolutePosition.column - right + 1))
+                    if distance < bestDistance {
+                        bestDistance = distance
+                        best = child
+                    }
+                } else {
+                    visit(child)
+                }
+            }
+        }
+        visit(self)
+        return best
+    }
 
     /// Pointer owner for a click that hit `self` (leaf Text, stack chrome, …).
     var pointerTargetOnClick: Element? {

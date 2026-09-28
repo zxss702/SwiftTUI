@@ -464,6 +464,37 @@ struct InteractionIsolationTests {
         #expect(app.window.firstResponder === field)
     }
 
+    /// Row chrome on the *same line band* as a Button (stack dead space beside
+    /// the label — Menu rows, toolbar items) must reach the Button via
+    /// positional donation. A Text-only row's dead space stays inert.
+    @Test func clickBesideButtonTextInRowActivatesButton() async throws {
+        final class Box { var taps = 0 }
+        let box = Box()
+        struct Root: View {
+            let box: Box
+            var body: some View {
+                VStack(alignment: .leading, spacing: 0) {
+                    Button("row-action") { box.taps += 1 }
+                    Text("plain-row")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+
+        let app = Application(rootView: Root(box: box))
+        try await app.testing_prepare(size: Size(width: 40, height: 8))
+
+        let button = try #require(findButtonLabeled("row-action", in: app.testing_rootElement))
+        let tail = Position(
+            column: button.absoluteFrame.position.column + button.absoluteFrame.size.width + 4,
+            line: button.absoluteFrame.position.line
+        )
+        #expect(!button.absoluteFrame.contains(tail))
+
+        try await clickAt(tail, on: app)
+        #expect(box.taps == 1, "row dead space beside the label must activate (taps=\(box.taps))")
+    }
+
     @Test func navigationPushForcesFullWindowPaint() async throws {
         struct Root: View {
             var body: some View {

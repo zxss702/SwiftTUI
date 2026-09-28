@@ -97,6 +97,8 @@ private struct HiddenModifier<Content: View>: View, PrimitiveView, ModifierView 
             isHidden ? nil : super.hitTest(position: position)
         }
 
+        override var acceptsHitDescendants: Bool { !isHidden }
+
         override func makeLayer() -> Layer {
             HiddenLayer(isHidden: { [weak self] in self?.isHidden ?? false })
         }

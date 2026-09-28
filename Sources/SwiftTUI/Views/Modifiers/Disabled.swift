@@ -87,6 +87,8 @@ private struct DisabledModifier<Content: View>: View, PrimitiveView, ModifierVie
             return self
         }
 
+        override var acceptsHitDescendants: Bool { !isDisabled }
+
         override func dispatchMouseEvent(_ event: MouseEvent) -> Bool {
             guard absoluteFrame.contains(event.position) else { return false }
             if isDisabled { return true }

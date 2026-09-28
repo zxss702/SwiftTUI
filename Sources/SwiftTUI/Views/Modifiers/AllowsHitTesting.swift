@@ -53,6 +53,8 @@ private struct AllowsHitTesting<Content: View>: View, PrimitiveView, ModifierVie
             children[0].layout(size: size)
         }
 
+        override var acceptsHitDescendants: Bool { enabled }
+
         override func hitTest(position: Position) -> Element? {
             guard enabled else { return nil }
             let local = position - layer.frame.position
