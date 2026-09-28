@@ -623,19 +623,18 @@ private final class PopoverFloatingElement: Element {
         )
 
         enum Placement { case below, above, trailing, leading }
-        let candidates: [(Placement, Extended, Bool)] = [
-            (.below, spaceBelow, spaceBelow >= ideal.height),
-            (.above, spaceAbove, spaceAbove >= ideal.height),
-            (.trailing, spaceTrailing, spaceTrailing >= ideal.width),
-            (.leading, spaceLeading, spaceLeading >= ideal.width),
-        ]
+        // 贴边优先：锚点更靠近哪条边，就沿该边所在轴向内弹出（顶→下、底→上、
+        // 左→右、右→左）；两侧都不贴边时退化到"哪边空间大弹哪边"。选定的轴
+        // 放不下时回退到另一轴。
+        let vPlacement: Placement = spaceAbove <= spaceBelow ? .below : .above
+        let hPlacement: Placement = spaceLeading <= spaceTrailing ? .trailing : .leading
+        let vFits = (vPlacement == .below ? spaceBelow : spaceAbove) >= ideal.height
+        let hFits = (hPlacement == .trailing ? spaceTrailing : spaceLeading) >= ideal.width
         let placement: Placement
-        if let bestFit = candidates.filter(\.2).max(by: { $0.1 < $1.1 }) {
-            placement = bestFit.0
-        } else if let best = candidates.max(by: { $0.1 < $1.1 }) {
-            placement = best.0
+        if min(spaceAbove, spaceBelow) <= min(spaceLeading, spaceTrailing) {
+            placement = vFits || !hFits ? vPlacement : hPlacement
         } else {
-            placement = .below
+            placement = hFits || !vFits ? hPlacement : vPlacement
         }
 
         let panelSize: Size
@@ -655,21 +654,49 @@ private final class PopoverFloatingElement: Element {
 
         let anchorCenterX = anchor.position.column + max(anchor.size.width, 1) / 2
         let anchorCenterY = anchor.position.line + max(anchor.size.height, 1) / 2
+        let anchorTrailing = anchor.position.column + max(anchor.size.width, 1)
+        let anchorBottom = anchor.position.line + max(anchor.size.height, 1)
         var column: Extended
         var line: Extended
         switch placement {
         case .below:
-            column = anchorCenterX - panelSize.width / 2
-            line = anchor.position.line + max(anchor.size.height, 1)
+            // 水平方向按锚点贴边对齐：右半屏锚点右缘对齐、左半屏左缘对齐，其余居中。
+            if spaceTrailing < panelSize.width {
+                column = anchorTrailing - panelSize.width
+            } else if spaceLeading < panelSize.width {
+                column = anchor.position.column
+            } else {
+                column = anchorCenterX - panelSize.width / 2
+            }
+            line = anchorBottom
         case .above:
-            column = anchorCenterX - panelSize.width / 2
+            if spaceTrailing < panelSize.width {
+                column = anchorTrailing - panelSize.width
+            } else if spaceLeading < panelSize.width {
+                column = anchor.position.column
+            } else {
+                column = anchorCenterX - panelSize.width / 2
+            }
             line = anchor.position.line - panelSize.height
         case .trailing:
-            column = anchor.position.column + max(anchor.size.width, 1)
-            line = anchorCenterY - panelSize.height / 2
+            column = anchorTrailing
+            // 垂直方向同理：锚点靠近下缘则面板底缘对齐锚点底缘，上缘同理。
+            if spaceBelow < panelSize.height {
+                line = anchorBottom - panelSize.height
+            } else if spaceAbove < panelSize.height {
+                line = anchor.position.line
+            } else {
+                line = anchorCenterY - panelSize.height / 2
+            }
         case .leading:
             column = anchor.position.column - panelSize.width
-            line = anchorCenterY - panelSize.height / 2
+            if spaceBelow < panelSize.height {
+                line = anchorBottom - panelSize.height
+            } else if spaceAbove < panelSize.height {
+                line = anchor.position.line
+            } else {
+                line = anchorCenterY - panelSize.height / 2
+            }
         }
         if column < 0 { column = 0 }
         if column + panelSize.width > size.width {
