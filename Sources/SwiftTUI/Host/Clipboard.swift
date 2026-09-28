@@ -18,11 +18,11 @@ import WinSDK
 enum Clipboard {
     static func copy(_ text: String, vtRenderer: VTRenderer?) {
         guard !text.isEmpty else { return }
-        if let vtRenderer {
+        if let terminal = vtRenderer?.terminalIfAvailable {
             let payload = Data(text.utf8).base64EncodedString()
             let sequence = "\u{1B}]52;c;\(payload)\u{07}"
             Task {
-                await vtRenderer.terminal.write(sequence)
+                await terminal.write(sequence)
             }
         }
         copyViaLocalPasteboard(text)

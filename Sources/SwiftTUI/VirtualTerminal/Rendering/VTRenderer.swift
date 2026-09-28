@@ -134,8 +134,10 @@ extension VTBuffer {
 /// }
 /// ```
 public final class VTRenderer: @unchecked Sendable {
-  /// The underlying platform-specific terminal implementation.
-  private let _terminal: PlatformTerminal
+  /// The underlying terminal implementation (platform terminal in production,
+  /// optionally a recording mock in tests).
+  /// `nil` only for the headless testing renderer (buffer pipeline without IO).
+  private let _terminal: (any VTTerminal)?
 
   /// The currently displayed buffer state (visible to the user).
   package var front: VTBuffer
@@ -161,9 +163,19 @@ public final class VTRenderer: @unchecked Sendable {
   /// - Parameter mode: Terminal mode configuration for capabilities and behavior
   /// - Throws: Terminal initialization errors
   public init(mode: VTMode) async throws {
-    self._terminal = try await PlatformTerminal(mode: mode)
-    self.front = VTBuffer(size: _terminal.size)
-    self.back = VTBuffer(size: _terminal.size)
+    let terminal = try await PlatformTerminal(mode: mode)
+    self._terminal = terminal
+    self.front = VTBuffer(size: terminal.size)
+    self.back = VTBuffer(size: terminal.size)
+  }
+
+  /// Headless renderer for tests: full double-buffer + damage pipeline.
+  /// With `terminal == nil` paint is a no-op; pass a recording mock terminal
+  /// to capture the escape stream for physical-screen emulation tests.
+  package init(testing size: Size, terminal: (any VTTerminal)? = nil) {
+    self._terminal = terminal
+    self.front = VTBuffer(size: size)
+    self.back = VTBuffer(size: size)
   }
 
   private var needsClear = false
@@ -211,7 +223,13 @@ public final class VTRenderer: @unchecked Sendable {
   /// // Access terminal properties
   /// let size = renderer.terminal.size
   /// ```
-  public var terminal: some VTTerminal {
+  public var terminal: any VTTerminal {
+    self._terminal!
+  }
+
+  /// Terminal handle when backed by real IO; `nil` for the headless test
+  /// renderer. Prefer this over `terminal` on paths that may run headless.
+  package var terminalIfAvailable: (any VTTerminal)? {
     self._terminal
   }
 
@@ -245,6 +263,7 @@ public final class VTRenderer: @unchecked Sendable {
   /// cell (often bottom-right) for one flush. Hide → paint → CUP+show inside
   /// the same SUM avoids that jump.
   private borrowing func paint(_ damages: [DamageSpan], cursor: VTPosition?) async {
+    guard _terminal != nil else { return }
     await withBufferedOutput(terminal: terminal) { stream in
       stream <<< .SetMode([.DEC(.SynchronizedUpdate)])
       defer { stream <<< .ResetMode([.DEC(.SynchronizedUpdate)]) }
@@ -341,7 +360,9 @@ public final class VTRenderer: @unchecked Sendable {
   ///   Synchronized Update as damage paint. Pass `nil` to hide the cursor.
   public func present(cursor: VTPosition? = nil) async {
     if needsClear {
-      await terminal.write("\u{1B}[2J\u{1B}[H")
+      if _terminal != nil {
+        await terminal.write("\u{1B}[2J\u{1B}[H")
+      }
       needsClear = false
     }
     let spans = damages(from: front, to: back)
