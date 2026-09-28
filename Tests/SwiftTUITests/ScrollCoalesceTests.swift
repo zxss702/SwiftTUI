@@ -56,4 +56,66 @@ struct ScrollCoalesceTests {
         _ = try await app.settleHost()
         #expect(sel.absoluteFrame.position.line == anchor, "opposite same-frame scrolls should cancel (anchor=\(anchor) after=\(sel.absoluteFrame.position.line))")
     }
+
+    /// 嵌套滚动：内层 ScrollView 内容放得下（maxOffset=0）时必须把滚轮事件
+    /// 让给外层，否则外层永远收不到 —— 设置 sheet 滚不动的回归。
+    private struct NestedRoot: View {
+        var body: some View {
+            ScrollView {
+                LazyVStack(alignment: .leading) {
+                    Text("top")
+                    ScrollView {
+                        Text("inner fits")
+                    }
+                    .frame(width: 20, height: 1)
+                    ForEach(0..<30, id: \.self) { i in
+                        Text("bottom \(i)")
+                    }
+                }
+            }
+        }
+    }
+
+    private func firstScrollElement(in control: Element?) -> Element? {
+        guard let control else { return nil }
+        if String(describing: type(of: control)).contains("ScrollElement") { return control }
+        for child in control.children {
+            if let found = firstScrollElement(in: child) { return found }
+        }
+        return nil
+    }
+
+    @Test func scrollOverUnscrollableInnerReachesOuter() async throws {
+        let app = Application(rootView: NestedRoot())
+        try await app.testing_prepare(size: Size(width: 30, height: 8))
+
+        let outer = try #require(firstScrollElement(in: app.testing_rootElement))
+        let inner = try #require(findScrollableInner(in: app.testing_rootElement))
+        let content = try #require(outer.children.first)
+        let innerPos = inner.absoluteFrame.position
+
+        // 滚轮落在内层区域 —— 内层 maxOffset=0 应放行给外层
+        let baseline = content.absoluteFrame.position.line
+        app.handleTerminalEvent(.mouse(MouseEvent(position: innerPos, type: .scroll(deltaX: 0, deltaY: 3))))
+        _ = try await app.settleHost()
+        #expect(content.absoluteFrame.position.line < baseline,
+                "滚轮被内层吞掉，外层没动 (baseline=\(baseline) after=\(content.absoluteFrame.position.line))")
+    }
+
+    private func findScrollableInner(in control: Element?) -> Element? {
+        guard let control else { return nil }
+        if String(describing: type(of: control)).contains("ScrollElement") {
+            var ancestor = control.parent
+            while let node = ancestor {
+                if String(describing: type(of: node)).contains("ScrollElement") {
+                    return control
+                }
+                ancestor = node.parent
+            }
+        }
+        for child in control.children {
+            if let found = findScrollableInner(in: child) { return found }
+        }
+        return nil
+    }
 }

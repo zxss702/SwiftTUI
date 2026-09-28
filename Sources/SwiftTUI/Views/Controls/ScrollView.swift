@@ -164,7 +164,12 @@ import Foundation
 
         override func consumeMouseEvent(_ event: MouseEvent) -> Bool {
             if case .scroll(_, let deltaY) = event.type {
-                contentOffset += Extended(deltaY)
+                // 滚不动（到底/到顶/内容放不满）时不吞事件——嵌套场景下冒泡给
+                // 外层 ScrollView（如 sheet 面板包住内容自带的 ScrollView）。
+                let maxOffset = max(Extended(0), cachedContentSize.height - layer.frame.size.height)
+                let newOffset = min(max(Extended(0), contentOffset + Extended(deltaY)), maxOffset)
+                guard newOffset != contentOffset else { return false }
+                contentOffset = newOffset
                 applyScrollOffset()
                 return true
             }
