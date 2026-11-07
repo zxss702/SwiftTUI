@@ -44,6 +44,89 @@ struct NavigationPipelineTests {
         #expect(!app.hasPendingCommitWork)
     }
 
+    @Test func backButtonHiddenTracksPageAndDynamicValue() async throws {
+        struct Detail: View {
+            @State var hidden = true
+            var body: some View {
+                VStack {
+                    Text("detail")
+                    Button("toggle") { hidden.toggle() }
+                    NavigationLink("next", value: 2)
+                }
+                .navigationTitle("Detail")
+                .navigationBarBackButtonHidden(hidden)
+            }
+        }
+        struct Root: View {
+            var body: some View {
+                NavigationStack {
+                    NavigationLink("go", value: 1)
+                        .navigationTitle("Home")
+                        .navigationDestination(for: Int.self) { n in
+                            if n == 1 {
+                                Detail()
+                            } else {
+                                Text("leaf").navigationTitle("Leaf")
+                            }
+                        }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare()
+        try await click(try #require(findButtonLabeled("go", in: app.testing_rootElement)), on: app)
+        #expect(findButtonLabeled("⟨Home", in: app.testing_rootElement) == nil)
+        #expect(findButtonLabeled("⟨返回", in: app.testing_rootElement) == nil)
+
+        try await click(try #require(findButtonLabeled("next", in: app.testing_rootElement)), on: app)
+        let leafBack = try #require(findButtonLabeled("⟨Detail", in: app.testing_rootElement)
+            ?? findButtonLabeled("⟨返回", in: app.testing_rootElement))
+        try await click(leafBack, on: app)
+        #expect(findText(in: app.testing_rootElement, equalTo: "detail") != nil)
+        #expect(findButtonLabeled("⟨Home", in: app.testing_rootElement) == nil)
+        #expect(findButtonLabeled("⟨返回", in: app.testing_rootElement) == nil)
+
+        try await click(try #require(findButtonLabeled("toggle", in: app.testing_rootElement)), on: app)
+        #expect(findButtonLabeled("⟨Home", in: app.testing_rootElement) != nil
+            || findButtonLabeled("⟨返回", in: app.testing_rootElement) != nil)
+        try await click(try #require(findButtonLabeled("toggle", in: app.testing_rootElement)), on: app)
+        #expect(findButtonLabeled("⟨Home", in: app.testing_rootElement) == nil)
+        #expect(findButtonLabeled("⟨返回", in: app.testing_rootElement) == nil)
+        try await click(try #require(findButtonLabeled("toggle", in: app.testing_rootElement)), on: app)
+        let back = try #require(findButtonLabeled("⟨Home", in: app.testing_rootElement)
+            ?? findButtonLabeled("⟨返回", in: app.testing_rootElement))
+        try await click(back, on: app)
+        #expect(findButtonLabeled("go", in: app.testing_rootElement) != nil)
+        #expect(!app.hasPendingCommitWork)
+    }
+
+    @Test func hiddenBackButtonDoesNotPreventDismiss() async throws {
+        struct Detail: View {
+            @Environment(\.dismiss) var dismiss
+            var body: some View {
+                Button("close") { dismiss() }
+                    .navigationBarBackButtonHidden()
+            }
+        }
+        struct Root: View {
+            var body: some View {
+                NavigationStack {
+                    NavigationLink("go", value: 1)
+                        .navigationDestination(for: Int.self) { _ in Detail() }
+                }
+            }
+        }
+
+        let app = Application(rootView: Root())
+        try await app.testing_prepare()
+        try await click(try #require(findButtonLabeled("go", in: app.testing_rootElement)), on: app)
+        #expect(findButtonLabeled("⟨返回", in: app.testing_rootElement) == nil)
+        try await click(try #require(findButtonLabeled("close", in: app.testing_rootElement)), on: app)
+        #expect(findButtonLabeled("go", in: app.testing_rootElement) != nil)
+        #expect(!app.hasPendingCommitWork)
+    }
+
     @Test func titleUpdatesSameTurnWithoutFrameStorm() async throws {
         struct Root: View {
             @State var title = "A"

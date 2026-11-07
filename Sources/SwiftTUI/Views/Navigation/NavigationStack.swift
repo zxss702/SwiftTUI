@@ -112,7 +112,7 @@ private struct NavigationBar: View, PrimitiveView {
         let backLabel = context.backButtonLabel
 
         return HStack(spacing: 1) {
-            if canPop {
+            if canPop && !(context.backButtonHidden[context.currentPageID] ?? false) {
                 Button(backLabel, action: navigateBack)
             }
             if let leading = toolbar.leading {

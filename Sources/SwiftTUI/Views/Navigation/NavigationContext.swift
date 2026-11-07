@@ -65,6 +65,9 @@ struct NavigationRootID: Hashable {
     /// 页面标题：key 为页面 id（根页用 `NavigationRootID`，其余为栈上的值）
     var titles: [AnyHashable: String] = [:]
 
+    @ObservationIgnored
+    var backButtonHidden: [AnyHashable: Bool] = [:]
+
     /// 各页工具栏三槽；写入时经 ``notifyChromeChange()`` 只弄脏 NavigationBar 节点。
     @ObservationIgnored
     var toolbars: [AnyHashable: NavigationToolbarContent] = [:]
@@ -137,6 +140,7 @@ struct NavigationRootID: Hashable {
         directDestinations.removeValue(forKey: removed)
         titles.removeValue(forKey: removed)
         toolbars.removeValue(forKey: removed)
+        backButtonHidden.removeValue(forKey: removed)
         notifyChromeChange()
         syncToBinding()
         notifyItemBridges()
@@ -180,6 +184,13 @@ struct NavigationRootID: Hashable {
     func setTitle(_ title: String, for id: AnyHashable) {
         guard titles[id] != title else { return }
         titles[id] = title
+        notifyChromeChange()
+    }
+
+    func setBackButtonHidden(_ hidden: Bool, for id: AnyHashable) {
+        guard (backButtonHidden[id] ?? false) != hidden else { return }
+        backButtonHidden[id] = hidden
+        guard id == currentPageID else { return }
         notifyChromeChange()
     }
 
@@ -250,6 +261,9 @@ struct NavigationRootID: Hashable {
         guard let pathSync else { return }
         let newStack = pathSync.read()
         guard newStack != stack else { return }
+        for id in stack where !newStack.contains(id) {
+            backButtonHidden.removeValue(forKey: id)
+        }
         stack = newStack
         notifyItemBridges()
     }
