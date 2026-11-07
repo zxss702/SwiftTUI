@@ -36,6 +36,46 @@ struct PropertyWrapperPipelineTests {
         #expect(!app.hasPendingCommitWork)
     }
 
+    @Test func bindingDynamicMembersReadAndWriteLatestRoot() {
+        struct Nested { var value = 1 }
+        struct Info { var fastMode = false; var name = "initial"; var nested = Nested() }
+        var info = Info()
+        let binding = Binding(get: { info }, set: { info = $0 })
+        let fastMode = binding.fastMode
+        let nestedValue = binding.nested.value
+
+        info.name = "updated"
+        info.nested.value = 2
+        #expect(nestedValue.wrappedValue == 2)
+        fastMode.wrappedValue = true
+        #expect(info.fastMode)
+        #expect(info.name == "updated")
+        #expect(info.nested.value == 2)
+        nestedValue.wrappedValue = 3
+        #expect(info.nested.value == 3)
+        #expect(info.fastMode)
+        #expect(info.name == "updated")
+    }
+
+    @Test func dynamicMemberToggleInvalidatesState() async throws {
+        struct Info: Equatable { var fastMode = false; var name = "kept" }
+        struct Root: View {
+            @State var info = Info()
+            var body: some View {
+                VStack {
+                    Toggle(isOn: $info.fastMode) { Text("fast") }
+                    Text("\(info.fastMode ? "on" : "off") \(info.name)")
+                }
+            }
+        }
+        let app = Application(rootView: Root())
+        try await app.testing_prepare()
+        #expect(findText(in: app.testing_rootElement, equalTo: "off kept") != nil)
+        try await click(try #require(findButton(in: app.testing_rootElement)), on: app)
+        #expect(findText(in: app.testing_rootElement, equalTo: "on kept") != nil)
+        #expect(!app.hasPendingCommitWork)
+    }
+
     @Test func focusStateRoundsTrip() async throws {
         struct Root: View {
             @FocusState var focused: Bool
